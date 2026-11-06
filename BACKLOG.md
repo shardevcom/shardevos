@@ -221,9 +221,10 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F15-01 | ISO bootable v1.0.0 | Imagen de instalación con todos los componentes | ⏳ |
-| F15-02 | Documentación completa | Guía de usuario, referencia de syscalls, guía de desarrollador | ⏳ |
-| F15-03 | Pruebas de integración | Pruebas de arranque, multi-proceso, búsqueda, red | ⏳ |
+| F15-01 | ISO bootable v1.0.0 | Imagen de instalación completa con kernel, drivers, UI, búsqueda IA y seguridad | ✅ |
+| F15-02 | Documentación completa | Guía de usuario, referencia de syscalls (35), guía de desarrollador, arquitectura | ✅ |
+| F15-03 | Pruebas de integración | Pruebas de arranque, multi-tarea, búsqueda, VFS, permisos, bloque | ✅ |
+| F15-04 | Release final | Repositorio listo para producción con todos los componentes integrados | ✅ |
 
 ---
 
