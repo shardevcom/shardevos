@@ -251,6 +251,113 @@ pub fn cr3() -> usize {
     unsafe { PML4_ADDR }
 }
 
+/// Crea un nuevo PML4 para espacio de usuario.
+/// Copia las entradas del kernel (para compartir memoria del kernel) y deja
+/// el espacio de usuario vacío. Retorna la dirección física del nuevo PML4.
+pub unsafe fn create_user_pml4() -> MemResult<usize> {
+    match crate::mm::frame_allocator::alloc_frame() {
+        Ok(frame) => {
+            let addr = frame_to_addr(frame);
+            core::ptr::write_bytes(addr as *mut u8, 0, PAGE_SIZE);
+
+            let new_pml4 = &mut *(addr as *mut PageTable);
+
+            // Copiar entradas del kernel (compartir espacio del kernel)
+            // El kernel usa la mitad alta (canonical 0xFFFF_8000_0000_0000+)
+            let kernel_pml4 = &*(PML4_ADDR as *const PageTable);
+            for i in 256..512 {
+                new_pml4.entries[i] = kernel_pml4.entries[i];
+            }
+
+            // Entrada 0 (espacio de usuario baja) queda vacía
+            Ok(addr)
+        }
+        Err(_) => Err(MemError::FrameExhausted),
+    }
+}
+
+/// Mapea una página en el PML4 dado con bit USER (espacio de usuario).
+/// flags debe incluir PAGE_PRESENT y PAGE_WRITABLE si se desea escritura.
+pub unsafe fn map_in(pml4_addr: usize, vaddr: usize, paddr: usize, flags: u64) -> MemResult<()> {
+    let vaddr = align_down(vaddr);
+    let paddr = align_down(paddr);
+    let indices = PageIndices::from_vaddr(vaddr);
+
+    let pml4 = &mut *(pml4_addr as *mut PageTable);
+
+    let pdpt_addr = get_or_create_table_in(pml4, indices.pml4)?;
+    let pdpt = &mut *(pdpt_addr as *mut PageTable);
+
+    let pd_addr = get_or_create_table_in(pdpt, indices.pdpt)?;
+    let pd = &mut *(pd_addr as *mut PageTable);
+
+    let pt_addr = get_or_create_table_in(pd, indices.pd)?;
+    let pt = &mut *(pt_addr as *mut PageTable);
+
+    if pt.entries[indices.pt] & PAGE_PRESENT != 0 {
+        return Err(MemError::AlreadyMapped);
+    }
+
+    pt.entries[indices.pt] = paddr as u64 | flags | PAGE_PRESENT | PAGE_USER;
+
+    Ok(())
+}
+
+/// Cambia el CR3 al PML4 dado (cambia espacio de direcciones).
+pub unsafe fn switch_cr3(pml4_addr: usize) {
+    asm!("mov cr3, {}", in(reg) pml4_addr, options(nostack));
+    PML4_ADDR = pml4_addr;
+}
+
+/// Obtiene o crea una tabla de nivel inferior en un PML4 dado.
+unsafe fn get_or_create_table_in(table: &mut PageTable, index: usize) -> MemResult<usize> {
+    let entry = table.entries[index];
+    if entry & PAGE_PRESENT != 0 {
+        return Ok((entry & !0xFFF) as usize);
+    }
+
+    match crate::mm::frame_allocator::alloc_frame() {
+        Ok(frame) => {
+            let addr = frame_to_addr(frame);
+            core::ptr::write_bytes(addr as *mut u8, 0, PAGE_SIZE);
+            table.entries[index] = addr as u64 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+            Ok(addr)
+        }
+        Err(_) => Err(MemError::FrameExhausted),
+    }
+}
+
+/// Clona un PML4 (para fork). Duplica todas las páginas mapeadas con COW.
+pub unsafe fn clone_pml4(src_pml4: usize) -> MemResult<usize> {
+    match crate::mm::frame_allocator::alloc_frame() {
+        Ok(frame) => {
+            let dst_addr = frame_to_addr(frame);
+            core::ptr::write_bytes(dst_addr as *mut u8, 0, PAGE_SIZE);
+
+            let src = &*(src_pml4 as *const PageTable);
+            let dst = &mut *(dst_addr as *mut PageTable);
+
+            // Copiar entradas del kernel (mitad alta, índices 256-511)
+            for i in 256..512 {
+                dst.entries[i] = src.entries[i];
+            }
+
+            // Para el espacio de usuario (mitad baja, índices 0-255),
+            // mapear las mismas páginas pero como solo-lectura (COW)
+            for i in 0..256 {
+                let entry = src.entries[i];
+                if entry & PAGE_PRESENT != 0 {
+                    // Marcar como solo lectura para COW
+                    dst.entries[i] = entry & !PAGE_WRITABLE;
+                }
+            }
+
+            Ok(dst_addr)
+        }
+        Err(_) => Err(MemError::FrameExhausted),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

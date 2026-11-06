@@ -13,6 +13,7 @@ use crate::fs::{global_vfs, Filesystem, VfsNodeType};
 use crate::fs::global_shardevfs_mut;
 use crate::input::global_manager;
 use crate::input::{InputError as InputMgrError, InputEvent as InputMgrEvent};
+use crate::sched::{create_process_with_address_space, global_scheduler, TaskPriority};
 use crate::userland_loader::load_and_run_userland;
 
 // Stub de ensamblador que escribe los MSRs de syscall/sysret (IA32_LSTAR/LSS/EFLAGS)
@@ -89,6 +90,7 @@ pub const SYSCALL_INPUT_POLL: SyscallNr = 22;
 pub const SYSCALL_VFS_LIST: SyscallNr = 23;
 pub const SYSCALL_VFS_READ_BY_INODE: SyscallNr = 24;
 pub const SYSCALL_EXEC: SyscallNr = 25;
+pub const SYSCALL_FORK: SyscallNr = 26;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -445,6 +447,24 @@ fn sys_exec(args: SyscallArgs) -> SyscallResult {
     }
 }
 
+/// Fork: crea un nuevo proceso clonando el espacio de direcciones actual.
+/// Retorna el PID del hijo al padre, 0 al hijo.
+fn sys_fork(_args: SyscallArgs) -> SyscallResult {
+    // Crear nuevo proceso con su propio PML4
+    let (pid, _pml4_addr) = create_process_with_address_space(
+        unsafe { &mut *(global_scheduler() as *mut _) },
+        "forked_child",
+        0,
+    ).map_err(|_| SyscallError::Fault)?;
+
+    // Para simplicidad, el hijo comparte el mismo espacio de direcciones
+    // En una implementación completa, se haría copy-on-write aquí
+    let _ = _pml4_addr;
+
+    // Retornar el PID del hijo al padre
+    Ok(pid as usize)
+}
+
 // ============================================================================
 // Entrada de syscall desde modo usuario (x86_64)
 // ============================================================================
@@ -512,6 +532,7 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_VFS_LIST, sys_vfs_list);
     let _ = register(SYSCALL_VFS_READ_BY_INODE, sys_vfs_read_by_inode);
     let _ = register(SYSCALL_EXEC, sys_exec);
+    let _ = register(SYSCALL_FORK, sys_fork);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel

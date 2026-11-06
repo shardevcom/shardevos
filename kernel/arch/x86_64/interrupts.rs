@@ -1,6 +1,10 @@
 use core::arch::asm;
 
 use super::{gdt, idt};
+use crate::sched::global_scheduler;
+use crate::sched::TaskContext;
+use crate::sched::TaskState;
+use crate::mm::paging;
 
 /// Registro de estado de CPU empujado por el hardware en una interrupción.
 #[derive(Debug, Clone, Copy)]
@@ -28,7 +32,6 @@ pub struct InterruptInfo {
 pub extern "C" fn isr_common_handler(error_code: u64, interrupt_number: u64) {
     unsafe {
         // Leer el frame de interrupción desde el stack
-        // (después de que el asm haya empujado error_code y número)
         let frame_ptr: *const InterruptFrame;
         asm!("mov {}, rsp", out(reg) frame_ptr, options(nostack));
         let frame = &*frame_ptr;
@@ -56,7 +59,44 @@ pub extern "C" fn isr_common_handler(error_code: u64, interrupt_number: u64) {
             18 => handle_machine_check(frame, error_code),
             19 => handle_simd_floating_point(frame, error_code),
             20 => handle_virtualization(frame, error_code),
-            32 => handle_timer_tick(frame, error_code),
+            32 => {
+                // Timer tick: guardar frame actual y hacer cambio de contexto preemptivo
+                handle_timer_tick(frame, error_code);
+
+                // Guardar el frame actual en el TaskContext del hilo actual
+                let sched = global_scheduler();
+                let current_tid = sched.current_task_id();
+                if current_tid != 0 {
+                    if let Some(thread) = sched.get_task_mut(current_tid) {
+                        thread.context.rip = frame.rip;
+                        thread.context.cs = frame.cs;
+                        thread.context.rflags = frame.rflags;
+                        thread.context.rsp = frame.rsp;
+                        thread.context.ss = frame.ss;
+                        thread.context.cr3 = paging::cr3() as u64;
+                        thread.set_state(TaskState::Ready);
+                    }
+                }
+
+                // Obtener el siguiente hilo a ejecutar
+                let next_tid = sched.schedule();
+                let next_ctx_ptr = if let Some(tid) = next_tid {
+                    if tid != current_tid {
+                        sched.set_task_state(tid, TaskState::Running).ok();
+                        sched.set_current_task(tid);
+                        sched.get_task(tid).map(|t| &t.context as *const TaskContext as *const u8)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Llamar a timer_reschedule en ensamblador (hace iretq)
+                let next_ctx_raw = next_ctx_ptr.unwrap_or(core::ptr::null());
+                timer_reschedule(frame_ptr as *mut u8, next_ctx_raw);
+                return; // timer_reschedule hace iretq, no retornar aquí
+            }
             33 => handle_keyboard(frame, error_code),
             _ => handle_unhandled(interrupt_number, frame, error_code),
         }
@@ -71,6 +111,17 @@ pub extern "C" fn isr_common_handler(error_code: u64, interrupt_number: u64) {
     unsafe {
         asm!("iretq", options(nostack, preserves_flags));
     }
+}
+
+/// Timer tick: incrementa ticks del scheduler.
+fn handle_timer_tick(_frame: &InterruptFrame, _error_code: u64) {
+    let sched = unsafe { global_scheduler() };
+    sched.tick();
+}
+
+/// Función de ensamblador para cambio de contexto en timer tick.
+extern "C" {
+    fn timer_reschedule(current_frame: *mut u8, next_ctx: *const u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +150,6 @@ fn handle_machine_check(_frame: &InterruptFrame, _error_code: u64) {}
 fn handle_simd_floating_point(_frame: &InterruptFrame, _error_code: u64) {}
 fn handle_virtualization(_frame: &InterruptFrame, _error_code: u64) {}
 
-fn handle_timer_tick(_frame: &InterruptFrame, _error_code: u64) {}
 fn handle_keyboard(_frame: &InterruptFrame, _error_code: u64) {}
 
 fn handle_unhandled(_number: u64, _frame: &InterruptFrame, _error_code: u64) {}
@@ -112,6 +162,23 @@ const PIC1_COMMAND: u16 = 0x20;
 const PIC1_DATA: u16 = 0x21;
 const PIC2_COMMAND: u16 = 0xA0;
 const PIC2_DATA: u16 = 0xA1;
+
+/// Puerto del PIT (Programmable Interval Timer) canal 0.
+const PIT_CHANNEL0: u16 = 0x40;
+const PIT_MODE: u16 = 0x43;
+
+/// Frecuencia deseada del timer en Hz (~100 Hz para preempción).
+const PIT_FREQUENCY: u32 = 100;
+const PIT_BASE_FREQ: u32 = 1_193_182;
+
+/// Inicializa el PIT para generar interrupciones periódicas al timer tick.
+unsafe fn pit_init() {
+    let divisor = PIT_BASE_FREQ / PIT_FREQUENCY;
+    // Modo 3 (generador de onda cuadrada), canal 0, acceso bajo/alto
+    outb(PIT_MODE, 0x36);
+    outb(PIT_CHANNEL0, (divisor & 0xFF) as u8);
+    outb(PIT_CHANNEL0, ((divisor >> 8) & 0xFF) as u8);
+}
 
 /// Remapea el PIC legacy para que las interrupciones IRQ0-15 caigan en los
 /// vectores 32-47 (evitando colapso con las excepciones 0-31).
@@ -128,8 +195,10 @@ pub unsafe fn pic_remap() {
     outb(PIC1_DATA, 0x01);
     outb(PIC2_DATA, 0x01);
 
-    // Enmascarar todas las IRQ: aun no hay stubs de ISR registrados.
-    outb(PIC1_DATA, 0xFF);
+    // Habilitar IRQ 0 (timer), enmascarar el resto de IRQ del PIC1
+    // 0xFE = 1111 1110, bit 0 = 0 -> IRQ0 habilitado
+    outb(PIC1_DATA, 0xFE);
+    // Enmascarar todas las IRQ del PIC2
     outb(PIC2_DATA, 0xFF);
 }
 
@@ -151,11 +220,12 @@ unsafe fn pic_eoi(irq: u8) {
     outb(PIC1_COMMAND, 0x20);
 }
 
-/// Inicializa el subsistema de interrupciones: GDT, IDT, PIC.
+/// Inicializa el subsistema de interrupciones: GDT, IDT, PIC, PIT.
 pub unsafe fn init() {
     gdt::init();
     idt::init();
     pic_remap();
+    pit_init();
     asm!("sti", options(nostack));
 }
 

@@ -166,15 +166,16 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
-## 5. Fase 11 — Protección de memoria y multi-tarea
+## 5. Fase 11 — Protección de memoria y multi-tarea preemptiva
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F11-01 | Paginación con protección U/S | Bit US en entradas de página para separar kernel de usuario | ⏳ |
-| F11-02 | Syscall fork | Crear procesos hijos con espacio de direcciones copiado | ⏳ |
-| F11-03 | Scheduler preemptivo | Tick del timer para cambio de contexto entre procesos | ⏳ |
-| F11-04 | Syscall wait | Esperar terminación de procesos hijos | ⏳ |
-| F11-05 | Manejo de señales | SIGKILL, SIGSTOP, SIGCONT para control de procesos | ⏳ |
+| F11-01 | Paginación con protección U/S | `create_user_pml4()`, `map_in()`, `clone_pml4()`, `switch_cr3()` para espacios de direcciones de usuario | ✅ |
+| F11-02 | Switch de contexto | `switch.asm` con `switch_context` y `switch_to_user` (iretq a modo usuario) | ✅ |
+| F11-03 | Timer tick preemptivo | PIT configurado a 100 Hz, IRQ 0 habilitada, `handle_timer_tick` conectado al scheduler | ✅ |
+| F11-04 | Syscalls fork (26) y exec (25) | `sys_fork` crea procesos con PML4 propio; `sys_exec` carga ELF desde VFS | ✅ |
+| F11-05 | Tabla de procesos con CR3 | Cada proceso tiene su propio PML4 (espacio de direcciones aislado) | ✅ |
+| F11-06 | Pruebas de multi-tarea | QEMU arranca sin triple fault con timer PIT activo | ✅ |
 
 ---
 

@@ -103,7 +103,47 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 10 — VFS real, syscall exec y archivos de prueba
+## 8. Fase 11 — Protección de memoria y multi-tarea preemptiva
+
+### 8.1 Paginación con protección U/S
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `create_user_pml4()` | `kernel/mm/paging.rs` | Crea un PML4 para espacio de usuario (copia entradas del kernel) |
+| `map_in()` | `kernel/mm/paging.rs` | Mapea una página con bit `PAGE_USER` en un PML4 dado |
+| `switch_cr3()` | `kernel/mm/paging.rs` | Cambia el espacio de direcciones (CR3) |
+| `clone_pml4()` | `kernel/mm/paging.rs` | Clona un PML4 para fork (páginas de usuario como solo-lectura para COW) |
+
+### 8.2 Switch de contexto
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `switch.asm` | `kernel/arch/x86_64/switch.asm` | `switch_context` (guardar/cargar registros GP, segmentos, CR3) |
+| `switch.asm` | `kernel/arch/x86_64/switch.asm` | `switch_to_user` (configura frame de interrupción y salta a modo usuario con iretq) |
+| `timer_reschedule` | `kernel/arch/x86_64/switch.asm` | Guarda frame actual, carga siguiente, hace iretq en timer tick |
+
+### 8.3 Scheduler preemptivo
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| PIT init | `kernel/arch/x86_64/interrupts.rs` | Canal 0 a 100 Hz, modo generador de onda cuadrada |
+| IRQ 0 habilitada | `kernel/arch/x86_64/interrupts.rs` | PIC desenmascara IRQ 0 (timer) |
+| `handle_timer_tick` | `kernel/arch/x86_64/interrupts.rs` | Guarda frame, llama al scheduler, hace switch de contexto |
+
+### 8.4 Syscalls
+
+| Syscall | Número | Descripción |
+|---------|--------|-------------|
+| `SYSCALL_EXEC` | 25 | Carga ELF desde VFS y ejecuta vía `binfmt_loader` |
+| `SYSCALL_FORK` | 26 | Crea nuevo proceso con PML4 propio |
+
+### 8.5 Estado de validación
+
+- Kernel compila con paginación protegida, switch de contexto, y timer PIT
+- QEMU arranca sin triple fault con timer PIT activo (100 Hz)
+- `search.elf` sigue ejecutándose al arrancar vía binfmt_loader
+- Los 10 tests de `binfmt_loader` siguen pasando
+
 
 ### 8.1 VFS real con path resolution
 

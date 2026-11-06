@@ -10,6 +10,7 @@
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use core::ptr::NonNull;
+use core::arch::asm;
 
 /// Identificador único de tarea.
 pub type TaskId = u64;
@@ -548,6 +549,119 @@ static mut THREAD_ALLOCATED: AtomicUsize = AtomicUsize::new(0);
 pub fn global_scheduler() -> &'static mut Scheduler {
     unsafe { &mut SCHEDULER }
 }
+
+// ============================================================================
+// Cambio de contexto y modo usuario
+// ============================================================================
+
+extern "C" {
+    fn switch_context(from: *mut TaskContext, to: *const TaskContext);
+    fn switch_to_user(entry_point: usize, user_rsp: usize, user_cr3: usize) -> !;
+}
+
+/// Punto de entrada para hilos nuevos de kernel.
+/// Se llama cuando un hilo recién creado ejecuta su primera vez.
+#[no_mangle]
+pub extern "C" fn thread_entry_stub() {
+    let sched = unsafe { global_scheduler() };
+    let current_tid = sched.current_task_id();
+    if let Some(thread) = sched.get_task(current_tid) {
+        let entry = thread.context.rip as usize;
+        unsafe {
+            core::mem::transmute::<usize, extern "C" fn() -> !>(entry)();
+        }
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// Realiza un cambio de contexto preemptivo.
+pub fn schedule_switch() {
+    let sched = unsafe { global_scheduler() };
+    let current_tid = sched.current_task_id();
+    let next_tid = match sched.schedule() {
+        Some(tid) => tid,
+        None => return,
+    };
+    if current_tid == next_tid {
+        return;
+    }
+    let from_ctx = if current_tid != 0 {
+        sched.get_task_mut(current_tid).map(|t| &mut t.context as *mut TaskContext)
+    } else {
+        None
+    };
+    let to_ctx = sched.get_task(next_tid).map(|t| &t.context as *const TaskContext);
+    match (from_ctx, to_ctx) {
+        (Some(from), Some(to)) => {
+            sched.set_current_task(next_tid);
+            unsafe {
+                switch_context(from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Ejecuta un programa de usuario en modo usuario (no retorna).
+pub fn run_user_program(entry_point: usize, user_stack: usize, user_cr3: usize) -> ! {
+    unsafe {
+        switch_to_user(entry_point, user_stack, user_cr3);
+    }
+}
+
+/// Cambia el espacio de direcciones (CR3).
+pub fn switch_address_space(cr3: usize) {
+    unsafe {
+        crate::mm::paging::switch_cr3(cr3);
+    }
+}
+
+/// Crea un proceso con su propio espacio de direcciones (PML4).
+pub fn create_process_with_address_space(
+    sched: &mut Scheduler,
+    name: &str,
+    parent_id: ProcessId,
+) -> Result<(ProcessId, usize), SchedulerError> {
+    let pid = sched.create_process(name, parent_id)?;
+    let pml4_addr = unsafe { crate::mm::paging::create_user_pml4()
+        .map_err(|_| SchedulerError::OutOfMemory)? };
+    Ok((pid, pml4_addr))
+}
+
+/// Called from timer_reschedule (assembly) to save the current interrupt frame
+/// and return the next TaskContext pointer.
+///   rdi = pointer to the saved InterruptFrame on the stack
+/// Returns: rax = pointer to the next TaskContext (or null if none)
+#[no_mangle]
+#[export_name = "scheduler_save_current"]
+#[allow(dead_code)]
+pub extern "C" fn scheduler_save_current(frame_ptr: *const u8) {
+    let sched = unsafe { global_scheduler() };
+    let current_tid = sched.current_task_id();
+
+    // InterruptFrame offsets: rip=0, cs=8, rflags=16, rsp=24, ss=32
+    if current_tid != 0 && !frame_ptr.is_null() {
+        if let Some(thread) = sched.get_task_mut(current_tid) {
+            unsafe {
+                thread.context.rip = core::ptr::read(frame_ptr as *const u64);
+                thread.context.cs = core::ptr::read(frame_ptr.add(8) as *const u64);
+                thread.context.rflags = core::ptr::read(frame_ptr.add(16) as *const u64);
+                thread.context.rsp = core::ptr::read(frame_ptr.add(24) as *const u64);
+                thread.context.ss = core::ptr::read(frame_ptr.add(32) as *const u64);
+                thread.context.cr3 = crate::mm::paging::cr3() as u64;
+                thread.set_state(TaskState::Ready);
+            }
+        }
+    }
+}
+
+/// Referencia estática para evitar que el eliminador de código muerto
+/// remueva scheduler_save_current (llamado desde ensamblador).
+#[used]
+static SCHEDULER_SAVE_CURRENT_REF: extern "C" fn(*const u8) =
+    scheduler_save_current;
 
 fn time_us() -> u64 {
     static mut TIME_COUNTER: u64 = 0;
