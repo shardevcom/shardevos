@@ -103,7 +103,40 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 11 — Protección de memoria y multi-tarea preemptiva
+## 8. Fase 12 — Drivers de dispositivo y red reales
+
+### 8.1 Módulo PCI
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `enumerate_pci_devices()` | `kernel/drivers/pci/mod.rs` | Escanea buses PCI (0-255), dispositivos (0-31), funciones (0-7) |
+| `find_virtio_devices()` | `kernel/drivers/pci/mod.rs` | Filtra dispositivos con vendor ID 0x1AF4 (VirtIO) |
+| `pci_read_config_*` / `pci_write_config_*` | `kernel/drivers/pci/mod.rs` | Lectura/escritura de registros de configuración PCI (puertos 0xCF8/0xCFC) |
+| `pci_enable_bus_mastering()` | `kernel/drivers/pci/mod.rs` | Habilita bus mastering y acceso a memoria para dispositivos |
+
+### 8.2 Driver VirtIO-Blk (disco real)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `VirtioBlkDriver` | `kernel/drivers/virtio_blk/mod.rs` | Driver completo VirtIO 1.0 sobre MMIO |
+| `discover_and_init()` | `kernel/drivers/virtio_blk/mod.rs` | Descubre dispositivo vía PCI, inicializa cola de descriptores |
+| `read_blocks()` / `write_blocks()` | `kernel/drivers/virtio_blk/mod.rs` | Lectura/escritura de bloques reales al disco virtual QEMU |
+| `global_virtio_blk()` | `kernel/drivers/virtio_blk/mod.rs` | Instancia global del driver |
+
+### 8.3 Syscalls de bloque para userspace
+
+| Syscall | Número | Descripción |
+|---------|--------|-------------|
+| `SYSCALL_BLOCK_READ` | 27 | Lee bloques (LBA) desde disco VirtIO |
+| `SYSCALL_BLOCK_WRITE` | 28 | Escribe bloques (LBA) al disco VirtIO |
+
+### 8.4 Estado de validación
+
+- Kernel compila con módulo PCI, driver VirtIO-Blk, y syscalls de bloque (27, 28)
+- QEMU arranca sin triple fault con driver Virtio-Blk intentándose inicializar
+- Los syscalls de bloque devuelven `DeviceNotFound` si no hay dispositivo VirtIO presente (comportamiento correcto)
+- Los 10 tests de `binfmt_loader` siguen pasando
+
 
 ### 8.1 Paginación con protección U/S
 

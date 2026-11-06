@@ -179,14 +179,16 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
-## 5. Fase 12 — Drivers de dispositivo y red
+## 5. Fase 12 — Drivers de dispositivo y red reales
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F12-01 | Driver de bloque real | Lectura/escritura de disco real vía IDE/NVMe/VirtIO | ⏳ |
-| F12-02 | Driver de red | Ethernet/WiFi mediante VirtIO-net o RTL8139 | ⏳ |
-| F12-03 | TCP/IP stack | TCP, UDP, IP, ARP, ICMP básicos | ⏳ |
-| F12-04 | Sistema de archivos en disco | shardevfs persistente en bloque real (no solo RAM) | ⏳ |
+| F12-01 | Módulo PCI | Enumeración de dispositivos PCI, lectura de BARs, búsqueda de dispositivos VirtIO | ✅ |
+| F12-02 | Driver VirtIO-Blk real | Protocolo VirtIO 1.0 sobre MMIO, lectura/escritura de bloques desde disco QEMU | ✅ |
+| F12-03 | Syscalls de bloque (27, 28) | `SYS_BLOCK_READ` y `SYS_BLOCK_WRITE` para acceso directo a disco desde userspace | ✅ |
+| F12-04 | Integrar shardevfs con bloque real | Persistencia de shardevfs en dispositivo de bloque real (no solo RAM) | ⏳ |
+| F12-05 | Driver VirtIO-Net | Protocolo VirtIO-Net para conectividad de red real | ⏳ |
+| F12-06 | Syscalls de red para userspace | Envío/recepción de paquetes desde espacio de usuario | ⏳ |
 
 ---
 

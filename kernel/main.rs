@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+use alloc::format;
 use crate::fs::Filesystem;
 
 pub mod ai_engine;
@@ -18,11 +19,15 @@ pub mod input;
 pub mod net;
 pub mod fs;
 pub mod mm;
+#[path = "drivers/pci/mod.rs"]
+pub mod pci;
 pub mod sched;
 pub mod syscall;
 pub mod ui_manager;
 pub mod userland_bin;
 pub mod userland_loader;
+#[path = "drivers/virtio_blk/mod.rs"]
+pub mod virtio_blk;
 
 pub use ui_manager::{
     DisplayMode, DisplayState, FramebufferInfo, PixelFormat, UiError, UiResult, next_window_id,
@@ -96,6 +101,25 @@ pub extern "C" fn kernel_main() -> ! {
         let _ = fs.write_data(3, 0, b"ShardevOS - Sistema Operativo Inteligente v0.1.0. Escrito en Rust + Assembly x86_64.");
         let _ = fs.create_inode(1, "search_demo.txt", crate::fs::VfsNodeType::RegularFile);
         let _ = fs.write_data(4, 0, b"Buscador semantico de archivos con indexacion vectorial y similitud de coseno.");
+    }
+
+    // Intentar inicializar el driver de bloque VirtIO (disco real en QEMU)
+    unsafe {
+        let blk = crate::virtio_blk::global_virtio_blk();
+        match blk.discover_and_init() {
+            Ok(()) => {
+                crate::vga_print_line("  [ OK ] VirtIO-Blk dispositivo de bloque detectado.", 17, 0x0A);
+                let info = blk.info();
+                crate::vga_print_line("  [ INFO ] Capacidad: sectores", 18, 0x0F);
+                // Mostrar capacidad en hex
+                let cap_hex = format!("0x{:x}", info.capacity_sectors);
+                crate::vga_print_line(&cap_hex, 19, 0x0F);
+            }
+            Err(e) => {
+                crate::vga_print_line("  [ WARN ] No se encontro dispositivo VirtIO-Blk.", 17, 0x0C);
+                let _ = e;
+            }
+        }
     }
 
     // Dibujar borde superior y logo con color azul claro (0x1F)

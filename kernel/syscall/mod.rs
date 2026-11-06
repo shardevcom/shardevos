@@ -15,6 +15,7 @@ use crate::input::global_manager;
 use crate::input::{InputError as InputMgrError, InputEvent as InputMgrEvent};
 use crate::sched::{create_process_with_address_space, global_scheduler, TaskPriority};
 use crate::userland_loader::load_and_run_userland;
+use crate::virtio_blk::global_virtio_blk;
 
 // Stub de ensamblador que escribe los MSRs de syscall/sysret (IA32_LSTAR/LSS/EFLAGS)
 extern "C" {
@@ -48,6 +49,8 @@ pub enum SyscallError {
     NotImplemented,
     Denied,
     Fault,
+    DeviceNotFound,
+    IOError,
 }
 
 /// Función manejadora de syscall.
@@ -91,6 +94,8 @@ pub const SYSCALL_VFS_LIST: SyscallNr = 23;
 pub const SYSCALL_VFS_READ_BY_INODE: SyscallNr = 24;
 pub const SYSCALL_EXEC: SyscallNr = 25;
 pub const SYSCALL_FORK: SyscallNr = 26;
+pub const SYSCALL_BLOCK_READ: SyscallNr = 27;
+pub const SYSCALL_BLOCK_WRITE: SyscallNr = 28;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -465,6 +470,66 @@ fn sys_fork(_args: SyscallArgs) -> SyscallResult {
     Ok(pid as usize)
 }
 
+/// Lee bloques desde el dispositivo de bloque VirtIO.
+/// arg1: sector (LBA), arg2: sector_count, arg3: ptr a buffer, arg4: tamaño del buffer en bytes.
+fn sys_block_read(args: SyscallArgs) -> SyscallResult {
+    let sector = args.arg1 as u64;
+    let sector_count = args.arg2 as u32;
+    let buffer = args.arg3 as *mut u8;
+    let buf_size = args.arg4;
+
+    if buffer.is_null() || buf_size == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let blk = unsafe { global_virtio_blk() };
+    if blk.state() != crate::virtio_blk::VirtioBlkState::Ready {
+        return Err(SyscallError::DeviceNotFound);
+    }
+
+    let bytes_needed = sector_count as u64 * blk.info().sector_size as u64;
+    if buf_size < bytes_needed as usize {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    unsafe {
+        blk.read_blocks(sector, sector_count, buffer)
+            .map_err(|_| SyscallError::IOError)?;
+    }
+
+    Ok(bytes_needed as usize)
+}
+
+/// Escribe bloques al dispositivo de bloque VirtIO.
+/// arg1: sector (LBA), arg2: sector_count, arg3: ptr a buffer, arg4: tamaño del buffer en bytes.
+fn sys_block_write(args: SyscallArgs) -> SyscallResult {
+    let sector = args.arg1 as u64;
+    let sector_count = args.arg2 as u32;
+    let buffer = args.arg3 as *const u8;
+    let buf_size = args.arg4;
+
+    if buffer.is_null() || buf_size == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let blk = unsafe { global_virtio_blk() };
+    if blk.state() != crate::virtio_blk::VirtioBlkState::Ready {
+        return Err(SyscallError::DeviceNotFound);
+    }
+
+    let bytes_needed = sector_count as u64 * blk.info().sector_size as u64;
+    if buf_size < bytes_needed as usize {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    unsafe {
+        blk.write_blocks(sector, sector_count, buffer)
+            .map_err(|_| SyscallError::IOError)?;
+    }
+
+    Ok(bytes_needed as usize)
+}
+
 // ============================================================================
 // Entrada de syscall desde modo usuario (x86_64)
 // ============================================================================
@@ -533,6 +598,8 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_VFS_READ_BY_INODE, sys_vfs_read_by_inode);
     let _ = register(SYSCALL_EXEC, sys_exec);
     let _ = register(SYSCALL_FORK, sys_fork);
+    let _ = register(SYSCALL_BLOCK_READ, sys_block_read);
+    let _ = register(SYSCALL_BLOCK_WRITE, sys_block_write);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel
