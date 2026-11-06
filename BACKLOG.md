@@ -208,9 +208,12 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F14-01 | Sistema de usuarios y grupos | UID/GID, permisos rwx, archivo /etc/passwd | ⏳ |
-| F14-02 | Autenticación | Login por contraseña, sesiones de usuario | ⏳ |
-| F14-03 | Capabilities y sandbox | Restringir syscalls por proceso | ⏳ |
+| F14-01 | Gestión de usuarios y grupos | `kernel/security/users.rs`: PasswdEntry, GroupEntry, add_user, add_group, get_user_by_name/uid, get_group_by_name/gid | ✅ |
+| F14-02 | Autenticación por contraseña | `kernel/security/users.rs`: authenticate() verifica credenciales | ✅ |
+| F14-03 | Contexto de seguridad por proceso | SecurityContext: uid, gid, euid, egid, grupos suplementarios, authenticated, session_id | ✅ |
+| F14-04 | Permisos rwx estilo Unix | `kernel/security/permissions.rs`: FileMode, AccessType, PermissionChecker, check_access, can_chown, can_chmod | ✅ |
+| F14-05 | Syscalls de autenticación | SYSCALL_GETUID (29), GETGID (30), GETEUID (31), GETEGID (32), LOGIN (33), SETUID (34), SETGID (35) | ✅ |
+| F14-06 | Root UID/GID | root (0/0) y nobody (65534/65534) creados automáticamente al arrancar | ✅ |
 
 ---
 

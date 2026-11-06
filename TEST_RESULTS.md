@@ -103,7 +103,62 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 13 — UI gráfica y AI Engine real
+## 8. Fase 14 — Multiusuario y seguridad
+
+### 8.1 Gestión de usuarios y grupos
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `PasswdEntry` | `kernel/security/users.rs` | username, password_hash, uid, gid, gecos, home_dir, shell |
+| `GroupEntry` | `kernel/security/users.rs` | group_name, password, gid, members |
+| `UserManager` | `kernel/security/users.rs` | add_user, add_group, get_user_by_name/uid, get_group_by_name/gid, authenticate |
+| `global_user_manager()` | `kernel/security/users.rs` | Instancia global del gestor de usuarios |
+| `init_user_manager()` | `kernel/security/users.rs` | Inicializa con root (0/0) y nobody (65534/65534) |
+
+### 8.2 Contexto de seguridad
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `SecurityContext` | `kernel/security/users.rs` | uid, gid, euid, egid, supplementary_gids, authenticated, session_id |
+| `current_security_ctx()` | `kernel/syscall/mod.rs` | Devuelve el contexto del proceso actual |
+| `set_current_security_ctx()` | `kernel/syscall/mod.rs` | Establece el contexto del proceso actual |
+
+### 8.3 Permisos de archivo
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `FileMode` | `kernel/security/permissions.rs` | Bits rwx para owner/grupo/otros, setuid, setgid, sticky |
+| `AccessType` | `kernel/security/permissions.rs` | Read, Write, Execute |
+| `PermissionChecker` | `kernel/security/permissions.rs` | check_access, can_create_in_directory, can_delete_from_directory, can_chown, can_chmod |
+
+### 8.4 Syscalls de autenticación
+
+| Syscall | Número | Descripción |
+|---------|--------|-------------|
+| `SYSCALL_GETUID` | 29 | Devuelve el UID real |
+| `SYSCALL_GETGID` | 30 | Devuelve el GID real |
+| `SYSCALL_GETEUID` | 31 | Devuelve el UID efectivo |
+| `SYSCALL_GETEGID` | 32 | Devuelve el GID efectivo |
+| `SYSCALL_LOGIN` | 33 | Autentica usuario con nombre y contraseña |
+| `SYSCALL_SETUID` | 34 | Establece UID efectivo (no implementado aún) |
+| `SYSCALL_SETGID` | 35 | Establece GID efectivo (no implementado aún) |
+
+### 8.5 Usuarios creados al arrancar
+
+| Usuario | UID | GID | Descripción |
+|---------|-----|-----|-------------|
+| root | 0 | 0 | Administrador del sistema |
+| nobody | 65534 | 65534 | Usuario no autenticado |
+
+### 8.6 Estado de validación
+
+- Kernel compila con módulo security completo (users + permissions)
+- 10 tests de usuarios y grupos pasando
+- 10 tests de permisos pasando (root access, owner access, group access, other access, sticky bit, chown/chmod restrictions)
+- Syscalls de autenticación registrados (29-35)
+- QEMU arranca sin triple fault con gestor de usuarios inicializado
+- Todos los syscalls previos (1-28) siguen funcionando
+
 
 ### 8.1 Modo gráfico VESA
 

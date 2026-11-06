@@ -24,6 +24,7 @@ pub mod mm;
 #[path = "drivers/pci/mod.rs"]
 pub mod pci;
 pub mod sched;
+pub mod security;
 pub mod syscall;
 pub mod ui_manager;
 pub mod userland_bin;
@@ -122,6 +123,12 @@ pub extern "C" fn kernel_main() -> ! {
                 let _ = e;
             }
         }
+    }
+
+    // Inicializar gestor de usuarios y grupos
+    unsafe {
+        crate::security::init_user_manager();
+        crate::vga_print_line("  [ OK ] Gestor de usuarios inicializado.", 21, 0x0A);
     }
 
     // Inicializar modo gráfico VESA para la UI

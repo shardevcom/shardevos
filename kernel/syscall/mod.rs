@@ -14,8 +14,34 @@ use crate::fs::global_shardevfs_mut;
 use crate::input::global_manager;
 use crate::input::{InputError as InputMgrError, InputEvent as InputMgrEvent};
 use crate::sched::{create_process_with_address_space, global_scheduler, TaskPriority};
+use crate::security::{
+    global_user_manager, init_user_manager, SecurityContext, ROOT_UID, ROOT_GID,
+    NOBODY_UID, NOBODY_GID,
+};
 use crate::userland_loader::load_and_run_userland;
 use crate::virtio_blk::global_virtio_blk;
+
+// Contexto de seguridad global del proceso actual (solo un hilo en esta etapa)
+static mut CURRENT_SECURITY_CTX: SecurityContext = SecurityContext {
+    uid: NOBODY_UID,
+    gid: NOBODY_GID,
+    euid: NOBODY_UID,
+    egid: NOBODY_GID,
+    supplementary_gids: [NOBODY_GID; 16],
+    supplementary_count: 0,
+    authenticated: false,
+    session_id: 0,
+};
+
+/// Devuelve el contexto de seguridad del proceso actual.
+pub fn current_security_ctx() -> SecurityContext {
+    unsafe { CURRENT_SECURITY_CTX }
+}
+
+/// Establece el contexto de seguridad del proceso actual.
+pub fn set_current_security_ctx(ctx: SecurityContext) {
+    unsafe { CURRENT_SECURITY_CTX = ctx; }
+}
 
 // Stub de ensamblador que escribe los MSRs de syscall/sysret (IA32_LSTAR/LSS/EFLAGS)
 extern "C" {
@@ -96,6 +122,13 @@ pub const SYSCALL_EXEC: SyscallNr = 25;
 pub const SYSCALL_FORK: SyscallNr = 26;
 pub const SYSCALL_BLOCK_READ: SyscallNr = 27;
 pub const SYSCALL_BLOCK_WRITE: SyscallNr = 28;
+pub const SYSCALL_GETUID: SyscallNr = 29;
+pub const SYSCALL_GETGID: SyscallNr = 30;
+pub const SYSCALL_GETEUID: SyscallNr = 31;
+pub const SYSCALL_GETEGID: SyscallNr = 32;
+pub const SYSCALL_LOGIN: SyscallNr = 33;
+pub const SYSCALL_SETUID: SyscallNr = 34;
+pub const SYSCALL_SETGID: SyscallNr = 35;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -530,6 +563,74 @@ fn sys_block_write(args: SyscallArgs) -> SyscallResult {
     Ok(bytes_needed as usize)
 }
 
+/// getuid: devuelve el UID real del proceso actual.
+fn sys_getuid(_args: SyscallArgs) -> SyscallResult {
+    Ok(current_security_ctx().uid as usize)
+}
+
+/// getgid: devuelve el GID real del proceso actual.
+fn sys_getgid(_args: SyscallArgs) -> SyscallResult {
+    Ok(current_security_ctx().gid as usize)
+}
+
+/// geteuid: devuelve el UID efectivo del proceso actual.
+fn sys_geteuid(_args: SyscallArgs) -> SyscallResult {
+    Ok(current_security_ctx().euid as usize)
+}
+
+/// getegid: devuelve el GID efectivo del proceso actual.
+fn sys_getegid(_args: SyscallArgs) -> SyscallResult {
+    Ok(current_security_ctx().egid as usize)
+}
+
+/// login: autentica al usuario con nombre de usuario y contraseña.
+/// arg1: ptr a nombre de usuario, arg2: longitud del nombre, arg3: ptr a contraseña, arg4: longitud de la contraseña.
+fn sys_login(args: SyscallArgs) -> SyscallResult {
+    let user_ptr = args.arg1 as *const u8;
+    let user_len = args.arg2 as usize;
+    let pass_ptr = args.arg3 as *const u8;
+    let pass_len = args.arg4 as usize;
+
+    if user_ptr.is_null() || user_len == 0 || user_len > 256 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    if pass_ptr.is_null() || pass_len == 0 || pass_len > 256 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let username = unsafe { core::str::from_utf8(core::slice::from_raw_parts(user_ptr, user_len)) }
+        .map_err(|_| SyscallError::InvalidArgument)?;
+    let password = unsafe { core::str::from_utf8(core::slice::from_raw_parts(pass_ptr, pass_len)) }
+        .map_err(|_| SyscallError::InvalidArgument)?;
+
+    let um = unsafe { global_user_manager() };
+    match um.authenticate(username, password) {
+        Ok((uid, gid)) => {
+            // Establecer el contexto de seguridad autenticado
+            let mut ctx = SecurityContext::new_unauthenticated();
+            ctx.uid = uid;
+            ctx.gid = gid;
+            ctx.euid = uid;
+            ctx.egid = gid;
+            ctx.authenticated = true;
+            ctx.session_id = 1;
+            set_current_security_ctx(ctx);
+            Ok(uid as usize)
+        }
+        Err(_) => Err(SyscallError::InvalidArgument),
+    }
+}
+
+/// setuid: establece el UID efectivo (solo root puede cambiar a cualquier UID).
+fn sys_setuid(_args: SyscallArgs) -> SyscallResult {
+    Err(SyscallError::NotImplemented)
+}
+
+/// setgid: establece el GID efectivo (solo root puede cambiar a cualquier GID).
+fn sys_setgid(_args: SyscallArgs) -> SyscallResult {
+    Err(SyscallError::NotImplemented)
+}
+
 // ============================================================================
 // Entrada de syscall desde modo usuario (x86_64)
 // ============================================================================
@@ -600,6 +701,13 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_FORK, sys_fork);
     let _ = register(SYSCALL_BLOCK_READ, sys_block_read);
     let _ = register(SYSCALL_BLOCK_WRITE, sys_block_write);
+    let _ = register(SYSCALL_GETUID, sys_getuid);
+    let _ = register(SYSCALL_GETGID, sys_getgid);
+    let _ = register(SYSCALL_GETEUID, sys_geteuid);
+    let _ = register(SYSCALL_GETEGID, sys_getegid);
+    let _ = register(SYSCALL_LOGIN, sys_login);
+    let _ = register(SYSCALL_SETUID, sys_setuid);
+    let _ = register(SYSCALL_SETGID, sys_setgid);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel
