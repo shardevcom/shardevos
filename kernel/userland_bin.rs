@@ -307,3 +307,6 @@ pub const USERLAND_HELLO_ELF: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 pub const USERLAND_HELLO_ELF_LEN: usize = 4888;
+
+pub const USERLAND_SEARCH_ELF: &[u8] = include_bytes!("../userland/search/search.elf");
+pub const USERLAND_SEARCH_ELF_LEN: usize = USERLAND_SEARCH_ELF.len();

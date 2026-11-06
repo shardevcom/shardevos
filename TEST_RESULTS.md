@@ -103,7 +103,37 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Limitaciones conocidas
+## 8. Fase 9 — Búsqueda e indexación de archivos con IA
+
+### 8.1 Arquitectura
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Syscalls VFS | `kernel/syscall/mod.rs` | `SYSCALL_VFS_LIST` (23) lista inodos; `SYSCALL_VFS_READ_BY_INODE` (24) lee por inodo |
+| Métodos VFS | `kernel/fs/mod.rs` | `Vfs::inode_count()`, `Vfs::inode_entry_at()` |
+| Wrappers userspace | `userland/search/syscalls.rs` | Wrappers `no_std` para exit/write/read/vfs_list/vfs_read_by_inode vía `syscall` |
+| Indexador + buscador | `userland/search/main.rs` | `index` lista e indexa archivos; `search` busca top-5 por coseno |
+| Binario de usuario | `userland/search/search.elf` | ELF64 estático cargado por el binfmt_loader del kernel |
+
+### 8.2 Modelo de IA recomendado
+
+No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
+
+- **Modelo de embeddings ligero quantizado:** `all-MiniLM-L6-v2` (INT8) o similar, ejecutado en **userspace** vía `ggml`/`llama.cpp` compilado como binario ELF que el `binfmt_loader` ejecuta nativamente.
+- **Conector:** la función `embed()` en `userland/search/main.rs` es un placeholder (hash FNV sobre contenido). Reemplazarla por una llamada al modelo de embeddings real.
+- **Índice:** archivo plano en shardevfs con vectores + metadatos (ruta, inode_id, tamaño).
+- **Búsqueda:** similitud de coseno top-k sobre el índice vectorial.
+
+### 8.3 Estado de validación
+
+- Kernel compila con los nuevos syscalls (23, 24).
+- Userspace `search.elf` compila para `x86_64-unknown-none`.
+- `search.elf` embebido en el kernel y cargado al arrancar vía `binfmt_loader`.
+- El indexador funciona cuando el VFS tenga archivos (actualmente la tabla de inodos está vacía; se necesita path resolution funcional en el VFS para indexar archivos reales).
+
+---
+
+## 9. Limitaciones conocidas
 
 - Salida por puerto serie COM1 no visible en entorno QEMU de prueba (configuración de terminal)
 - Los módulos AI Engine y self-healing son stubs de producción; requieren modelos externos y pruebas de fallo reales para validación completa

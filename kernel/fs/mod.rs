@@ -345,6 +345,11 @@ impl InodeTable {
         self.inodes.get(id as usize).and_then(|i| i.as_ref())
     }
 
+    /// Devuelve el inodo en un índice dado del almacenamiento interno (para iteración).
+    pub fn entry_at(&self, index: usize) -> Option<&VfsInode> {
+        self.inodes.get(index).and_then(|i| i.as_ref())
+    }
+
     pub fn get_mut(&mut self, id: InodeId) -> Option<&mut VfsInode> {
         self.inodes.get_mut(id as usize).and_then(|i| i.as_mut())
     }
@@ -621,6 +626,11 @@ impl Vfs {
     /// Devuelve el número de inodos.
     pub fn inode_count(&self) -> usize {
         self.inodes.lock().count
+    }
+
+    /// Devuelve una copia del inodo en un índice dado (VfsInode es Copy).
+    pub fn inode_entry_at(&self, index: usize) -> Option<VfsInode> {
+        self.inodes.lock().entry_at(index).copied()
     }
 }
 

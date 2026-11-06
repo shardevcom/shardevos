@@ -102,7 +102,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     // Cargar y ejecutar programa de usuario (binfmt_loader)
     vga_print_line("  [ INFO ] Cargando programa de usuario...", 18, 0x0F);
-    match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_HELLO_ELF) {
+    match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_SEARCH_ELF) {
         Ok(()) => {
             vga_print_line("  [ OK ] Programa de usuario ejecutado.", 19, 0x0A);
         }

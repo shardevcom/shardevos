@@ -141,6 +141,18 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
+## 5. Fase 9 — Búsqueda e indexación de archivos con IA
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F9-01 | Syscall VFS_LIST + VFS_READ_BY_INODE | `SYSCALL_VFS_LIST` (23) lista inodos del VFS; `SYSCALL_VFS_READ_BY_INODE` (24) lee un inodo por ID | ✅ |
+| F9-02 | Wrappers de syscall para userspace | `userland/search/syscalls.rs` con wrappers `no_std` para exit/write/read/vfs_list/vfs_read_by_inode vía instrucción `syscall` | ✅ |
+| F9-03 | Indexador de archivos | `userland/search/main.rs` cmd `index`: lista inodos, lee archivos, genera embeddings (placeholder) y guarda índice en memoria | ✅ |
+| F9-04 | Buscador semántico top-k | `userland/search/main.rs` cmd `search`: genera embedding de consulta y devuelve top-5 por similitud de coseno | ✅ |
+| F9-05 | Modelo de embeddings ligero | Placeholder `embed()` en userspace; reemplazar por modelo quantizado (ej. all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp compilado como ELF de usuario) | ⏳ |
+
+---
+
 ## 5. Comandos de Desarrollo
 
 ```bash
@@ -155,3 +167,7 @@ rustc --edition 2021 --test binfmt_loader/mod.rs -o /tmp/shardevos_test && /tmp/
 # Limpiar
 ./build/build.sh clean
 ```
+
+# Compilar userspace search (Fase 9)
+source $HOME/.cargo/env
+rustc --target x86_64-unknown-none -C relocation-model=static -C link-arg=-Tuserland/search/linker.ld userland/search/main.rs -o userland/search/search.elf

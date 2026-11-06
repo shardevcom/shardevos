@@ -8,7 +8,9 @@
 
 use core::arch::asm;
 
-// Acceso al Unified Input Manager a través del crate root
+// Acceso al Unified Input Manager y VFS a través del crate root
+use crate::fs::global_vfs;
+use crate::fs::VfsNodeType;
 use crate::input::global_manager;
 use crate::input::{InputError as InputMgrError, InputEvent as InputMgrEvent};
 
@@ -83,6 +85,8 @@ pub const SYSCALL_POLL: SyscallNr = 19;
 pub const SYSCALL_NANOSLEEP: SyscallNr = 20;
 pub const SYSCALL_INPUT_READ: SyscallNr = 21;
 pub const SYSCALL_INPUT_POLL: SyscallNr = 22;
+pub const SYSCALL_VFS_LIST: SyscallNr = 23;
+pub const SYSCALL_VFS_READ_BY_INODE: SyscallNr = 24;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -325,6 +329,70 @@ fn sys_input_poll(_args: SyscallArgs) -> SyscallResult {
     }
 }
 
+/// Lista inodos del VFS (para indexación de archivos).
+/// arg1: unused; arg2: ptr a buffer de salida; arg3: tamaño del buffer.
+/// Formato de salida: u64 count, luego [u64 inode_id, u64 size, u8 node_type] repetido.
+fn sys_vfs_list(args: SyscallArgs) -> SyscallResult {
+    let buf = args.arg2 as *mut u8;
+    let count = args.arg3;
+    if buf.is_null() || count < 8 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let vfs = global_vfs();
+    let total = vfs.inode_count();
+    let mut written: usize = 0;
+    // Escribir count
+    if written + 8 <= count {
+        unsafe {
+            core::ptr::write_volatile(buf.add(written) as *mut u64, total as u64);
+        }
+        written += 8;
+    }
+    let max_entries = ((count - written) / 17).min(total as usize);
+    for i in 0..max_entries {
+        if let Some(inode) = vfs.inode_entry_at(i) {
+            if written + 17 > count {
+                break;
+            }
+            unsafe {
+                core::ptr::write_volatile(buf.add(written) as *mut u64, inode.id);
+                core::ptr::write_volatile(buf.add(written + 8) as *mut u64, inode.size);
+                core::ptr::write_volatile(buf.add(written + 16) as *mut u8, inode.node_type as u8);
+            }
+            written += 17;
+        }
+    }
+    Ok(written)
+}
+
+/// Lee datos de un inodo por ID (placeholder: devuelve metadatos + ceros).
+/// arg1: inode_id; arg2: offset; arg3: ptr a buffer; arg4: count.
+fn sys_vfs_read_by_inode(args: SyscallArgs) -> SyscallResult {
+    let inode_id = args.arg1;
+    let offset = args.arg2;
+    let buf = args.arg3 as *mut u8;
+    let count = args.arg4;
+    if buf.is_null() || count == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let vfs = global_vfs();
+    let stat = match vfs.stat(inode_id as u64) {
+        Ok(s) => s,
+        Err(_) => return Err(SyscallError::InvalidArgument),
+    };
+    if stat.node_type != VfsNodeType::RegularFile {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let start = offset as usize;
+    let end = (start + count).min(stat.size as usize);
+    let read_len = if start >= stat.size as usize { 0 } else { end - start };
+    // Placeholder: rellenar con ceros (lectura real requiere device de bloque)
+    for b in unsafe { core::slice::from_raw_parts_mut(buf, read_len) }.iter_mut() {
+        *b = 0;
+    }
+    Ok(read_len)
+}
+
 // ============================================================================
 // Entrada de syscall desde modo usuario (x86_64)
 // ============================================================================
@@ -389,6 +457,8 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_NANOSLEEP, sys_nanosleep);
     let _ = register(SYSCALL_INPUT_READ, sys_input_read);
     let _ = register(SYSCALL_INPUT_POLL, sys_input_poll);
+    let _ = register(SYSCALL_VFS_LIST, sys_vfs_list);
+    let _ = register(SYSCALL_VFS_READ_BY_INODE, sys_vfs_read_by_inode);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel
