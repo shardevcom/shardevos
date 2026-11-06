@@ -196,11 +196,11 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F13-01 | Servidor de display gráfico | Modo gráfico VGA/VESA con framebuffer | ⏳ |
-| F13-01 | Ventanero con decoraciones | Barras de título, botones, arrastre de ventanas | ⏳ |
-| F13-02 | AI Engine con modelo real | all-MiniLM-L6-v2 INT8 para embeddings en userspace | ⏳ |
-| F13-03 | SLM con Function Calling | Llama/TinyLlama para comandos de voz al SO | ⏳ |
-| F13-04 | STT/TTS locales | whisper.cpp + Piper compilados como ELF de usuario | ⏳ |
+| F13-01 | Modo gráfico VESA | `kernel/ui_manager/display.rs`: modo 800x600@32, framebuffer LFB, primitivas (píxel, rect, texto 8x8) | ✅ |
+| F13-02 | UI en arranque | `kernel/main.rs`: fondo degradado, barra de título, info del sistema, resultados de búsqueda | ✅ |
+| F13-03 | AI Engine con modelo real | Conector para all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp compilado como ELF de usuario | ⏳ |
+| F13-04 | SLM con Function Calling | Llama/TinyLlama para comandos de voz al SO | ⏳ |
+| F13-05 | STT/TTS locales | whisper.cpp + Piper compilados como ELF de usuario | ⏳ |
 
 ---
 

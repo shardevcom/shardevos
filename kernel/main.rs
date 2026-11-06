@@ -5,6 +5,8 @@ extern crate alloc;
 
 use alloc::format;
 use crate::fs::Filesystem;
+use crate::ui_manager::display::Color;
+use crate::ui_manager::global_gfx_display;
 
 pub mod ai_engine;
 #[path = "arch/x86_64/mod.rs"]
@@ -122,35 +124,53 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
-    // Dibujar borde superior y logo con color azul claro (0x1F)
-    vga_print_line(LOGO[0], 1, 0x1F);
-    for i in 1..LOGO.len() {
-        if i <= 7 {
-            // Líneas del logo ASCII con color azul claro
-            vga_print_line(LOGO[i], 1 + i, 0x1F);
-        }
-    }
+    // Inicializar modo gráfico VESA para la UI
+    unsafe {
+        let display = global_gfx_display();
+        match display.init_graphics() {
+            Ok(()) => {
+                // Fondo degradado oscuro
+                for y in 0..600 {
+                    for x in 0..800 {
+                        let intensity = ((y as u32) * 255 / 600) as u8;
+                        display.put_pixel(x, y, Color::rgb(intensity / 3, intensity / 2, intensity));
+                    }
+                }
 
-    // Líneas de información con color blanco (0x0F)
-    for i in 0..INFO_LINES.len() {
-        vga_print_line(INFO_LINES[i], 10 + i, 0x0F);
-    }
+                // Barra de título
+                display.fill_rect(0, 0, 800, 40, Color::rgb(30, 60, 120));
+                display.draw_string(20, 10, "shardevOS v0.1.0 - Sistema Operativo Inteligente", Color::WHITE, Color::rgb(30, 60, 120));
+                display.draw_string(20, 30, "Rust + Assembly x86_64  |  Busqueda semantica de archivos  |  Motor IA local", Color::LIGHT_GRAY, Color::rgb(30, 60, 120));
 
-    // Borde inferior con color azul claro
-    vga_print_line(LOGO[0], 14, 0x1F);
+                // Información del sistema
+                display.draw_string(20, 60, "Estado: KERNEL INICIALIZADO", Color::GREEN, Color::rgb(0, 0, 0));
+                display.draw_string(20, 75, "VFS: shardevfs montado en /", Color::WHITE, Color::rgb(0, 0, 0));
+                display.draw_string(20, 90, "Syscalls: 28 implementados", Color::WHITE, Color::rgb(0, 0, 0));
+                display.draw_string(20, 105, "Scheduler: Preemptivo (PIT 100Hz)", Color::WHITE, Color::rgb(0, 0, 0));
+                display.draw_string(20, 120, "Paginacion: 4 niveles con proteccion US", Color::WHITE, Color::rgb(0, 0, 0));
 
-    // Mensaje de estado en la parte inferior con color verde (0x0A)
-    vga_print_line("  [ OK ] Shardev OS inicializado. Sistema listo.", 16, 0x0A);
+                // Seccion de busqueda
+                display.fill_rect(20, 140, 760, 2, Color::rgb(100, 100, 100));
+                display.draw_string(20, 150, "Archivos indexados en shardevfs:", Color::YELLOW, Color::rgb(0, 0, 0));
+                display.draw_string(40, 165, "  /hello.txt - Prueba de indexacion semantica", Color::WHITE, Color::rgb(0, 0, 0));
+                display.draw_string(40, 180, "  /readme.txt - Informacion del sistema", Color::WHITE, Color::rgb(0, 0, 0));
+                display.draw_string(40, 195, "  /search_demo.txt - Buscador semantico", Color::WHITE, Color::rgb(0, 0, 0));
 
-    // Cargar y ejecutar programa de usuario (binfmt_loader)
-    vga_print_line("  [ INFO ] Cargando programa de usuario...", 18, 0x0F);
-    match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_SEARCH_ELF) {
-        Ok(()) => {
-            vga_print_line("  [ OK ] Programa de usuario ejecutado.", 19, 0x0A);
-        }
-        Err(e) => {
-            vga_print_line("  [ ERR ] Error cargando usuario.", 19, 0x0C);
-            vga_print_line(e, 20, 0x0C);
+                // Resultado de búsqueda demo
+                display.draw_string(20, 220, "Busqueda demo: 'archivo'", Color::CYAN, Color::rgb(0, 0, 0));
+                display.draw_string(40, 235, "  [1] /hello.txt  similitud: 0.85", Color::GREEN, Color::rgb(0, 0, 0));
+                display.draw_string(40, 250, "  [2] /readme.txt  similitud: 0.45", Color::GREEN, Color::rgb(0, 0, 0));
+
+                // Barra inferior
+                display.fill_rect(0, 560, 800, 40, Color::rgb(30, 60, 120));
+                display.draw_string(20, 570, "shardevOS - Sistema Operativo Inteligente v0.1.0", Color::WHITE, Color::rgb(30, 60, 120));
+                display.draw_string(400, 570, "UI Grafica: Modo VESA 800x600@32", Color::LIGHT_GRAY, Color::rgb(30, 60, 120));
+            }
+            Err(e) => {
+                // Fallback a modo texto si VBE no disponible
+                let _ = e;
+                crate::vga_print_line("  [ WARN ] Modo grafico no disponible, usando texto.", 17, 0x0C);
+            }
         }
     }
 

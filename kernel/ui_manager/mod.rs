@@ -7,11 +7,13 @@
 //! - Integración con el Unified Input Manager
 
 pub mod compositor;
+pub mod display;
 pub mod display_server;
 pub mod responsive;
 pub mod window;
 
 pub use self::compositor::{Compositor, CompositeMode, CompositeStats, global_compositor};
+pub use self::display::{Color as GfxColor, DisplayServer as GfxDisplay, FramebufferInfo as GfxFramebufferInfo, global_display as global_gfx_display};
 pub use self::display_server::{DisplayServer, global_display_server};
 pub use self::responsive::{Breakpoint, BreakpointRule, DeviceCategory, Orientation, ResponsiveConfig, ResponsiveManager, global_responsive_manager};
 pub use self::window::{Framebuffer, Window, WindowId, WindowProperties, WindowState, WindowManager, global_window_manager};

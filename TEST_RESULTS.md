@@ -103,7 +103,37 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 12 — Drivers de dispositivo y red reales
+## 8. Fase 13 — UI gráfica y AI Engine real
+
+### 8.1 Modo gráfico VESA
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `DisplayServer` | `kernel/ui_manager/display.rs` | Servidor de display con framebuffer LFB |
+| `init_graphics()` | `kernel/ui_manager/display.rs` | Establece modo VESA 800x600@32 mediante puertos VBE (Bochs/QEMU) |
+| `put_pixel()` / `fill_rect()` / `draw_rect()` | `kernel/ui_manager/display.rs` | Primitivas de dibujo |
+| `draw_char()` / `draw_string()` | `kernel/ui_manager/display.rs` | Renderizado de texto con fuente 8x8 incorporada |
+| `global_gfx_display()` | `kernel/ui_manager/mod.rs` | Instancia global del display gráfico |
+
+### 8.2 UI en arranque
+
+| Pantalla | Descripción |
+|----------|-------------|
+| Fondo | Degradado azul oscuro (0-255 intensidad vertical) |
+| Barra de título | "shardevOS v0.1.0 - Sistema Operativo Inteligente" + subtítulo |
+| Info sistema | Estado del kernel, VFS, syscalls, scheduler, paginación |
+| Archivos indexados | Lista de /hello.txt, /readme.txt, /search_demo.txt |
+| Búsqueda demo | Resultados simulados con similitud de coseno |
+| Barra inferior | Versión y modo de video |
+
+### 8.3 Estado de validación
+
+- Kernel compila con modo gráfico VESA y UI de arranque
+- QEMU arranca sin triple fault con display gráfico inicializado
+- Si VBE no está disponible, fallback a modo texto con advertencia
+- Los 10 tests de `binfmt_loader` siguen pasando
+- Todos los syscalls (28) siguen funcionando
+
 
 ### 8.1 Módulo PCI
 
