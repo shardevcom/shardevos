@@ -103,7 +103,52 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 14 — Multiusuario y seguridad
+## 8. Fase 16 — Persistencia, red y seguridad mejorada (v1.1.0)
+
+### 8.1 shardevfs persistente en disco
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `VirtioBlk` backend | `kernel/fs/mod.rs` | `read_data`/`write_data` escriben al disco VirtIO (write-through) |
+| `init()` carga desde disco | `kernel/fs/mod.rs` | Al arrancar, lee los primeros 64KB del disco VirtIO hacia data_store |
+| `disk_available` flag | `kernel/fs/mod.rs` | Indica si hay dispositivo de bloque disponible |
+
+### 8.2 Driver VirtIO-Net (red real)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `VirtioNetDriver` | `kernel/drivers/virtio_net/mod.rs` | Driver completo VirtIO 1.0 sobre MMIO con colas RX y TX |
+| `discover_and_init()` | `kernel/drivers/virtio_net/mod.rs` | Descubre dispositivo vía PCI, configura colas RX/TX |
+| `send_packet()` | `kernel/drivers/virtio_net/mod.rs` | Envía paquetes Ethernet por la red |
+| `receive_packet()` | `kernel/drivers/virtio_net/mod.rs` | Recibe paquetes Ethernet (polling) |
+| `global_virtio_net()` | `kernel/drivers/virtio_net/mod.rs` | Instancia global del driver |
+
+### 8.3 Stack TCP/IP mínimo
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `net_receive()` | `kernel/drivers/net/stack.rs` | Procesa paquetes entrantes (ARP, IPv4) |
+| `handle_arp()` | `kernel/drivers/net/stack.rs` | Responde a ARP requests para nuestra IP |
+| `handle_icmp()` | `kernel/drivers/net/stack.rs` | Responde a ICMP echo request (ping) |
+| `icmp_echo_request()` | `kernel/drivers/net/stack.rs` | Envía ping a una IP destino |
+| `ip_send()` | `kernel/drivers/net/stack.rs` | Envía paquetes IPv4 con encabezado correcto |
+
+### 8.4 Syscalls de seguridad (setuid/setgid)
+
+| Syscall | Número | Descripción |
+|---------|--------|-------------|
+| `SYSCALL_SETUID` | 34 | Establece UID efectivo (solo root) |
+| `SYSCALL_SETGID` | 35 | Establece GID efectivo (solo root) |
+
+### 8.5 Estado de validación
+
+- Kernel compila con VirtIO-Net, stack TCP/IP, syscalls setuid/setgid
+- QEMU arranca sin triple fault con todos los módulos integrados
+- shardevfs puede leer/escribir al disco VirtIO (persistencia)
+- stack de red responde a ARP y ICMP echo (ping)
+- Los 10 tests de `binfmt_loader` siguen pasando
+- Tests de usuarios/grupos y permisos siguen pasando
+
 
 ### 8.1 Gestión de usuarios y grupos
 

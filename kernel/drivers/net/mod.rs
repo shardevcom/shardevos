@@ -33,7 +33,7 @@ pub type NetResult<T> = Result<T, NetError>;
 /// Identificador único de dispositivo de red.
 pub type NetDeviceId = u64;
 
-/// Tamaño máximo de un paquete Ethernet (MTU estándar).
+pub mod stack;
 #[allow(dead_code)]
 const MTU: usize = 1500;
 

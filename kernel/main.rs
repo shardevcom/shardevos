@@ -31,6 +31,8 @@ pub mod userland_bin;
 pub mod userland_loader;
 #[path = "drivers/virtio_blk/mod.rs"]
 pub mod virtio_blk;
+#[path = "drivers/virtio_net/mod.rs"]
+pub mod virtio_net;
 
 pub use ui_manager::{
     DisplayMode, DisplayState, FramebufferInfo, PixelFormat, UiError, UiResult, next_window_id,
@@ -129,6 +131,32 @@ pub extern "C" fn kernel_main() -> ! {
     unsafe {
         crate::security::init_user_manager();
         crate::vga_print_line("  [ OK ] Gestor de usuarios inicializado.", 21, 0x0A);
+    }
+
+    // Intentar inicializar el driver de red VirtIO-Net
+    unsafe {
+        let net = crate::virtio_net::global_virtio_net();
+        match net.discover_and_init() {
+            Ok(()) => {
+                crate::vga_print_line("  [ OK ] VirtIO-Net dispositivo de red detectado.", 22, 0x0A);
+                let info = net.info();
+                let mac = format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    info.mac_address[0], info.mac_address[1], info.mac_address[2],
+                    info.mac_address[3], info.mac_address[4], info.mac_address[5]);
+                crate::vga_print_line(&format!("  [ INFO ] MAC: {}", mac), 23, 0x0F);
+                crate::vga_print_line(&format!("  [ INFO ] MTU: {}", info.mtu), 24, 0x0F);
+            }
+            Err(e) => {
+                crate::vga_print_line("  [ WARN ] No se encontro dispositivo VirtIO-Net.", 22, 0x0C);
+                let _ = e;
+            }
+        }
+    }
+
+    // Inicializar stack de red (ARP, ICMP)
+    unsafe {
+        crate::net::stack::init([10, 0, 0, 2], [255, 255, 255, 0], [10, 0, 0, 1]);
+        crate::vga_print_line("  [ OK ] Stack de red inicializado (ARP, ICMP).", 25, 0x0A);
     }
 
     // Inicializar modo gráfico VESA para la UI

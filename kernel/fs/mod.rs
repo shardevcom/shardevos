@@ -8,6 +8,8 @@ use alloc::vec::Vec;
 use core::cmp::min;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::virtio_blk::global_virtio_blk;
+
 // ============================================================================
 // Tipos básicos del VFS
 // ============================================================================
@@ -788,6 +790,7 @@ pub struct Shardevfs {
     root_entries: [DiskDirEntry; 64],
     root_entry_count: usize,
     data_store: [u8; 65536],
+    disk_available: bool,
     initialized: AtomicU64,
 }
 
@@ -819,12 +822,40 @@ impl Shardevfs {
             }; 64],
             root_entry_count: 0,
             data_store: [0; 65536],
+            disk_available: false,
             initialized: AtomicU64::new(0),
         }
     }
 
     pub unsafe fn init(&mut self) {
         self.initialized.store(1, Ordering::Release);
+
+        // Intentar cargar desde dispositivo de bloque VirtIO si está disponible
+        let blk = global_virtio_blk();
+        if blk.state() == crate::virtio_blk::VirtioBlkState::Ready {
+            // Leer los primeros 64KB (128 sectores de 512 bytes) del disco hacia data_store
+            let mut read_ok = true;
+            for sector in (0..128).step_by(16) {
+                let sector_count = 16u32;
+                let buf_ptr = unsafe { self.data_store.as_mut_ptr().add(sector * 512) };
+                match unsafe { blk.read_blocks(sector as u64, sector_count, buf_ptr) } {
+                    Ok(()) => {}
+                    Err(_) => {
+                        read_ok = false;
+                        break;
+                    }
+                }
+            }
+            if read_ok {
+                self.disk_available = true;
+                crate::vga_print_line("  [ OK ] shardevfs: cargado desde disco VirtIO.", 22, 0x0A);
+            } else {
+                crate::vga_print_line("  [ WARN ] shardevfs: no se pudo leer disco VirtIO, usando RAM.", 22, 0x0C);
+            }
+        } else {
+            crate::vga_print_line("  [ INFO ] shardevfs: sin dispositivo VirtIO, usando RAM.", 22, 0x0F);
+        }
+
         let root = DiskInode {
             id: 1, node_type: VfsNodeType::Directory as u8, size: 0,
             data_blocks: [0; 16], atime_us: time_us(), mtime_us: time_us(),
@@ -994,6 +1025,32 @@ impl Filesystem for Shardevfs {
             }
         }
         self.data_store[offset..offset + write_len].copy_from_slice(buf);
+
+        // Write-through: escribir también al disco VirtIO si está disponible
+        if self.disk_available {
+            let blk = global_virtio_blk();
+            if blk.state() == crate::virtio_blk::VirtioBlkState::Ready {
+                // Escribir sectores completos que cubran el rango [offset, offset+write_len)
+                let start_sector = (offset / 512) as u64;
+                let end_sector = ((offset + write_len + 511) / 512) as u64;
+                let mut sector = start_sector;
+                while sector < end_sector {
+                    let sector_offset = (sector * 512) as usize;
+                    let sector_end = min(sector_offset + 512, offset + write_len);
+                    let sector_len = sector_end - sector_offset;
+                    let buf_ptr = unsafe { buf.as_ptr().add(sector_offset - offset) };
+                    match unsafe { blk.write_blocks(sector, 1, buf_ptr) } {
+                        Ok(()) => {}
+                        Err(_) => {
+                            // Si falla la escritura al disco, seguimos con RAM (caché)
+                            break;
+                        }
+                    }
+                    sector += 1;
+                }
+            }
+        }
+
         let disk_inode = &mut self.inodes[inode_id as usize - 1];
         disk_inode.data_blocks = new_blocks;
         disk_inode.size = new_size as u64;

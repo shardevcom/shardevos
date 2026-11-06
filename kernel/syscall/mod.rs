@@ -77,6 +77,7 @@ pub enum SyscallError {
     Fault,
     DeviceNotFound,
     IOError,
+    PermissionDenied,
 }
 
 /// Función manejadora de syscall.
@@ -622,13 +623,31 @@ fn sys_login(args: SyscallArgs) -> SyscallResult {
 }
 
 /// setuid: establece el UID efectivo (solo root puede cambiar a cualquier UID).
-fn sys_setuid(_args: SyscallArgs) -> SyscallResult {
-    Err(SyscallError::NotImplemented)
+/// arg1: nuevo UID.
+fn sys_setuid(args: SyscallArgs) -> SyscallResult {
+    let new_uid = args.arg1 as u32;
+    let ctx = current_security_ctx();
+    if ctx.euid != ROOT_UID {
+        return Err(SyscallError::PermissionDenied);
+    }
+    let mut new_ctx = ctx;
+    new_ctx.euid = new_uid;
+    set_current_security_ctx(new_ctx);
+    Ok(0)
 }
 
 /// setgid: establece el GID efectivo (solo root puede cambiar a cualquier GID).
-fn sys_setgid(_args: SyscallArgs) -> SyscallResult {
-    Err(SyscallError::NotImplemented)
+/// arg1: nuevo GID.
+fn sys_setgid(args: SyscallArgs) -> SyscallResult {
+    let new_gid = args.arg1 as u32;
+    let ctx = current_security_ctx();
+    if ctx.euid != ROOT_UID {
+        return Err(SyscallError::PermissionDenied);
+    }
+    let mut new_ctx = ctx;
+    new_ctx.egid = new_gid;
+    set_current_security_ctx(new_ctx);
+    Ok(0)
 }
 
 // ============================================================================

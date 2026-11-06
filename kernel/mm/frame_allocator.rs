@@ -2,7 +2,7 @@
 //! Cada bit representa un marco de página de 4 KB.
 //! No depende de `alloc` (puede usarse antes de inicializar el heap).
 
-use crate::mm::{addr_to_frame, MemError, MemResult};
+use crate::mm::{addr_to_frame, MemError, MemResult, PAGE_SIZE};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Número máximo de marcos soportados (inicialmente 1 M de marcos = 4 GB de RAM).
@@ -99,6 +99,11 @@ pub fn dealloc_frame(frame: usize) -> MemResult<()> {
     FREE_FRAMES.fetch_add(1, Ordering::Release);
     unlock();
     Ok(())
+}
+
+/// Convierte un número de marco a su dirección física.
+pub fn frame_to_addr(frame: usize) -> usize {
+    frame * PAGE_SIZE
 }
 
 /// Marca un marco como usado (reservado).

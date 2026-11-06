@@ -1,7 +1,7 @@
-# shardevos — Release v1.0.0
+# shardevos — Release v1.1.0
 
 > **shardevos** — Sistema Operativo Inteligente de Kernel Unificado  
-> Versión: 1.0.0 (Release estable)  
+> Versión: 1.1.0 (Release estable con persistencia y red)  
 > Fecha: Noviembre 2026  
 > Arquitectura: Kernel monolítico modular en Rust (`no_std`) + Assembly x86_64  
 > Repositorio: git@github.com:shardevcom/shardevos.git  
@@ -12,7 +12,7 @@
 
 shardevos es un sistema operativo escrito desde cero en Rust y Assembly x86_64, diseñado para ejecutar binarios heterogéneos (PE/ELF/MachO) nativamente, con un pipeline de entrada unificado, motor de IA multimodal local, capacidades de autogestión, UI gráfica responsiva, y un sistema de seguridad multiusuario completo.
 
-Esta es la **primera release estable (v1.0.0)** con todas las fases de desarrollo completadas (F1-F15).
+Esta release **v1.1.0** añade persistencia de archivos en disco real, conectividad de red (VirtIO-Net + stack TCP/IP), y syscalls de gestión de identidad (setuid/setgid).
 
 ---
 
@@ -25,13 +25,15 @@ Esta es la **primera release estable (v1.0.0)** con todas las fases de desarroll
 | **Memoria** | Paginación con protección | PML4→PDPT→PD→PT, bit U/S para separar kernel de usuario, frame allocator bitmap |
 | **Multi-tarea** | Scheduler preemptivo | Round-robin por prioridades, timer PIT a 100 Hz, cambio de contexto con `iretq`, `fork` (syscall 26) |
 | **Binarios** | Cargador universal | Ejecuta `.exe` (PE), `.deb`/ELF (Linux), `.app`/MachO (macOS) nativamente sin emulación |
-| **Sistema de archivos** | VFS + shardevfs | Path resolution real (`/foo/bar.txt`), open/read/write/close/stat, archivos en RAM |
-| **Dispositivo de bloque** | VirtIO-Blk | Protocolo VirtIO 1.0 sobre MMIO, lectura/escritura de bloques reales en disco QEMU |
+| **Sistema de archivos** | VFS + shardevfs | Path resolution real (`/foo/bar.txt`), open/read/write/close/stat, archivos en RAM y disco |
+| **Dispositivo de bloque** | VirtIO-Blk real | Protocolo VirtIO 1.0 sobre MMIO, lectura/escritura de bloques reales en disco QEMU |
 | **Syscalls de bloque** | `sys_block_read/write` | Números 27 y 28 para acceso directo a disco desde userspace |
+| **Red** | VirtIO-Net real | Protocolo VirtIO 1.0 sobre MMIO, colas RX/TX, envío/recepción de paquetes Ethernet |
+| **Stack TCP/IP** | ARP + ICMP | Resolución de direcciones MAC (ARP), echo request/reply (ping), encabezado IPv4 |
 | **Interfaz gráfica** | UI Responsiva VESA | Modo gráfico 800x600@32 RGBA, framebuffer LFB, primitivas de dibujo, texto 8x8, barra de título |
 | **Búsqueda IA** | Indexador semántico | Indexa archivos por contenido, búsqueda top-5 por similitud de coseno, embeddings placeholder |
 | **Seguridad** | Multiusuario | Usuarios/grupos (/etc/passwd, /etc/group), autenticación por contraseña, permisos rwx estilo Unix |
-| **Syscalls de seguridad** | `getuid`/`login`/etc. | Números 29-35 para gestión de identidad y autenticación |
+| **Syscalls de seguridad** | `getuid`/`login`/`setuid`/`setgid` | Números 29-35 para gestión de identidad y autenticación |
 | **Total de syscalls** | 35 | Desde `exit` (1) hasta `setgid` (35) |
 
 ---
@@ -45,10 +47,13 @@ Esta es la **primera release estable (v1.0.0)** con todas las fases de desarroll
 ├─────────────────────────────────────────────────────────────┤
 │                    Capa de Syscalls Unificada               │
 │  (35 syscalls: exit/write/read/open/close/stat/exec/fork/   │
-│   block_read/block_read/getuid/geteuid/login/...)           │
+│   block_read/block_write/getuid/geteuid/login/setuid/...)   │
 ├─────────────────────────────────────────────────────────────┤
 │                    Módulo de Seguridad                      │
 │  Usuarios/grupos │ Autenticación │ Permisos rwx │ Contextos │
+├─────────────────────────────────────────────────────────────┤
+│                    Stack TCP/IP                             │
+│  ARP (resolución MAC) │ ICMP (ping) │ IPv4 (encabezado)    │
 ├─────────────────────────────────────────────────────────────┤
 │                    Unified Input Manager                    │
 │  Táctil Multi-Touch │ Visión por Computadora (CV)           │
@@ -60,10 +65,10 @@ Esta es la **primera release estable (v1.0.0)** con todas las fases de desarroll
 │  AI Scheduler (CPU/RAM predictivo) │ Self-Healing          │
 ├─────────────────────────────────────────────────────────────┤
 │              VFS y Sistemas de Archivos                     │
-│  shardevfs nativo │ Path resolution real                    │
+│  shardevfs nativo │ Path resolution real │ Persistencia en disco │
 ├─────────────────────────────────────────────────────────────┤
 │              Drivers de Dispositivo                         │
-│  Bloque (VirtIO-Blk real) │ Red (Ethernet/WiFi/VirtIO)     │
+│  Bloque (VirtIO-Blk real) │ Red (VirtIO-Net real)          │
 ├─────────────────────────────────────────────────────────────┤
 │              Kernel Core (Rust + Assembly x86_64)           │
 │  GDT/IDT │ Paginación 4 niveles │ Heap │ Interrupciones    │
@@ -81,8 +86,9 @@ shardevos/
 ├── Cargo.toml                    # Manifiesto del crate principal
 ├── Cargo.lock
 ├── README.md                     # Documentación del proyecto
-├── BACKLOG.md                    # Plan de trabajo (Fases 1-15)
+├── BACKLOG.md                    # Plan de trabajo (Fases 1-16)
 ├── TEST_RESULTS.md               # Resultados de pruebas de todas las fases
+├── RELEASE.md                    # Notas de release (este archivo)
 ├── LICENSE                       # Licencia MIT
 │
 ├── binfmt_loader/
@@ -114,12 +120,15 @@ shardevos/
 │   ├── drivers/
 │   │   ├── block/mod.rs          # Driver de dispositivo de bloque (stub + VirtIO-Blk real)
 │   │   ├── virtio_blk/mod.rs     # Driver VirtIO-Blk 1.0 sobre MMIO (disco real QEMU)
+│   │   ├── virtio_net/mod.rs     # Driver VirtIO-Net 1.0 sobre MMIO (red real QEMU)
+│   │   ├── net/                  # Stack de red (ARP, ICMP, IPv4)
+│   │   │   └── stack.rs          # Protocolo TCP/IP mínimo
 │   │   ├── gpu_npu/mod.rs        # Driver GPU/NPU acceleration
 │   │   ├── input/                # Input Manager (táctil + visión por computadora)
-│   │   └── net/mod.rs            # Driver de red (Ethernet/WiFi/VirtIO)
+│   │   └── net/mod.rs            # Driver de red base (Ethernet/WiFi/VirtIO)
 │   ├── fs/
-│   │   ├── mod.rs                # VFS (path resolution real, open/read/write/close/stat)
-│   │   └── shardevfs.rs          # Sistema de archivos nativo shardevfs (inodos, bitmap, directorio raíz)
+│   │   ├── mod.rs                # VFS + shardevfs (path resolution real, open/read/write/close/stat, persistencia en disco)
+│   │   └── ...
 │   ├── security/
 │   │   ├── mod.rs                # Módulo de seguridad (usuarios + permisos)
 │   │   ├── users.rs              # Gestión de usuarios/grupos, autenticación
@@ -190,7 +199,7 @@ cd /home/elber/shardevos
 # Compilar y ejecutar en QEMU
 ./build/build.sh run
 
-# Compilar y crear imagen ISO booteable v1.0.0
+# Compilar y crear imagen ISO booteable v1.1.0
 ./build/build.sh iso
 
 # Compilar y ejecutar todo
@@ -227,9 +236,11 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 [shardevos] Inicializando UI Manager (VESA 800x600@32)...
 [shardevos] Inicializando Self-Healing...
 [shardevos] Inicializando VFS...
-[shardevos] Inicializando gestor de usuarios (root/nobody)...
-[shardevos] [ OK ] VirtIO-Blk dispositivo de bloque detectado.  (si hay disco QEMU)
+[shardevos] [ OK ] shardevfs: cargado desde disco VirtIO.  (si hay disco QEMU)
 [shardevos] [ OK ] Gestor de usuarios inicializado.
+[shardevos] [ OK ] VirtIO-Blk dispositivo de bloque detectado.
+[shardevos] [ OK ] VirtIO-Net dispositivo de red detectado.
+[shardevos] [ OK ] Stack de red inicializado (ARP, ICMP).
 [shardevos] Kernel listo. UI gráfica activada.
 ```
 
@@ -272,8 +283,8 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 | 31 | `sys_geteuid` | Obtener UID efectivo |
 | 32 | `sys_getegid` | Obtener GID efectivo |
 | 33 | `sys_login` | Autenticar usuario |
-| 34 | `sys_setuid` | Establecer UID efectivo |
-| 35 | `sys_setgid` | Establecer GID efectivo |
+| 34 | `sys_setuid` | Establecer UID efectivo (solo root) |
+| 35 | `sys_setgid` | Establecer GID efectivo (solo root) |
 
 ---
 
@@ -285,8 +296,11 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 # Arrancar desde ISO
 qemu-system-x86_64 -cdrom build/ShardevOS.iso -nographic -monitor null -serial stdio -no-reboot -m 256 -vga std -machine q35
 
-# Con disco VirtIO real (para probar VirtIO-Blk)
+# Con disco VirtIO real (para probar persistencia de shardevfs)
 qemu-system-x86_64 -cdrom build/ShardevOS.iso -drive file=fat:rw:/tmp/disk,if=virtio -nographic -monitor null -serial stdio -no-reboot -m 256 -vga std -machine q35
+
+# Con red VirtIO (para probar stack TCP/IP)
+qemu-system-x86_64 -cdrom build/ShardevOS.iso -netdev user,id=net0 -device virtio-net-pci,netdev=net0 -nographic -monitor null -serial stdio -no-reboot -m 256 -vga std -machine q35
 ```
 
 ### VirtualBox
@@ -308,22 +322,21 @@ O usar imagen de disquete:
 
 | Limitación | Descripción | Plan |
 |------------|-------------|------|
-| Salida serial en QEMU | El puerto serie COM1 no siempre es visible en entornos de prueba headless | Usar `-curses` o monitor gráfico cuando esté disponible |
+| Salida serial en QEMU | El puerto serie COM1 no siempre es visible en entornos de prueba headless | Usar modo gráfico VESA (funcional) |
 | AI Engine | Módulos integrados pero requieren modelos externos (whisper.cpp, Piper, Llama) para funcionar completamente | Conectar modelos quantizados en userspace |
-| shardevfs persistente | Actualmente opera en RAM; persistencia en disco requiere integración completa con VirtIO-Blk | Conectar shardevfs con dispositivo de bloque real |
-| Red | Driver de red definido pero sin stack TCP/IP completo | Implementar TCP/IP stack (ARP, ICMP, TCP, UDP) |
-| setuid/setgid | Syscalls registrados pero no implementados completamente | Implementar cambio de identidad de proceso |
+| setuid/setgid | Implementados pero solo para root; no hay cambio de identidad de usuario no-root | Ampliar a usuarios no-root con verificación |
+| syscalls de red para userspace | Stack TCP/IP en kernel pero sin syscalls para usarlo desde userspace | Agregar syscalls socket/connect/send/recv |
 | Multiusuario completo | Contexto de seguridad por proceso implementado; aislamiento completo de memoria entre usuarios pendiente | Paginación con espacios de direcciones aislados por usuario |
 
 ---
 
-## 9. Roadmap Futuro (v1.1.0+)
+## 9. Roadmap Futuro (v1.2.0+)
 
 | Versión | Características | Fase |
 |---------|---------------|------|
-| v1.1.0 | VirtIO-Net + TCP/IP stack, shardevfs persistente en disco | F16-F17 |
-| v1.2.0 | AI Engine con modelo quantizado real (all-MiniLM-L6-v2 INT8) | F18-F19 |
-| v1.3.0 | UI con ventanas, compositor, ratón, gestos táctiles | F20-F21 |
+| v1.2.0 | Syscalls de red para userspace (socket, connect, send, recv) | F17 |
+| v1.3.0 | AI Engine con modelo quantizado real (all-MiniLM-L6-v2 INT8) | F18-F19 |
+| v1.4.0 | UI con ventanas, compositor, ratón, gestos táctiles | F20-F21 |
 | v2.0.0 | Multiusuario completo con aislamiento de memoria, sandbox de procesos | F22-F24 |
 
 ---
@@ -338,4 +351,4 @@ O usar imagen de disquete:
 
 ---
 
-*Última actualización: Noviembre 2026 — Release v1.0.0*
+*Última actualización: Noviembre 2026 — Release v1.1.0*

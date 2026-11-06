@@ -186,13 +186,25 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F12-01 | Módulo PCI | Enumeración de dispositivos PCI, lectura de BARs, búsqueda de dispositivos VirtIO | ✅ |
 | F12-02 | Driver VirtIO-Blk real | Protocolo VirtIO 1.0 sobre MMIO, lectura/escritura de bloques desde disco QEMU | ✅ |
 | F12-03 | Syscalls de bloque (27, 28) | `SYS_BLOCK_READ` y `SYS_BLOCK_WRITE` para acceso directo a disco desde userspace | ✅ |
-| F12-04 | Integrar shardevfs con bloque real | Persistencia de shardevfs en dispositivo de bloque real (no solo RAM) | ⏳ |
-| F12-05 | Driver VirtIO-Net | Protocolo VirtIO-Net para conectividad de red real | ⏳ |
+| F12-04 | Integrar shardevfs con bloque real | Persistencia de shardevfs en dispositivo de bloque real vía VirtIO-Blk | ✅ |
+| F12-05 | Driver VirtIO-Net | Protocolo VirtIO-Net para conectividad de red real | ✅ |
 | F12-06 | Syscalls de red para userspace | Envío/recepción de paquetes desde espacio de usuario | ⏳ |
 
 ---
 
-## 5. Fase 13 — UI gráfica y AI Engine real
+## 5. Fase 16 — Persistencia, red y seguridad mejorada (v1.1.0)
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F16-01 | shardevfs persistente en disco | `kernel/fs/mod.rs`: read_data/write_data usan VirtIO-Blk (write-through), init() carga desde disco | ✅ |
+| F16-02 | Driver VirtIO-Net real | `kernel/drivers/virtio_net/mod.rs`: protocolo VirtIO 1.0 MMIO, colas RX/TX, envío/recepción de paquetes Ethernet | ✅ |
+| F16-03 | Stack TCP/IP mínimo | `kernel/drivers/net/stack.rs`: ARP request/reply, ICMP echo request/reply (ping), IPv4 básico | ✅ |
+| F16-04 | Syscalls setuid/setgid | SYSCALL_SETUID (34) y SYSCALL_SETGID (35): solo root puede cambiar euid/egid | ✅ |
+| F16-05 | Salida de consola mejorada | UI gráfica VESA en arranque, mensajes de estado en pantalla | ✅ |
+
+---
+
+## 5. Comandos de Desarrollo
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
