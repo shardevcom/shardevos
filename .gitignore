@@ -1,0 +1,24 @@
+# Build artefacts
+target/
+build/
+*.iso
+*.bin
+*.elf
+*.o
+*.img
+*.flp
+
+# IDE
+.idea/
+.vscode/
+
+# VirtualBox / VMs
+VBox.log
+vms/
+
+# Signing keys (do not commit)
+MOK.der
+MOK.priv
+
+# OS-specific
+.DS_Store

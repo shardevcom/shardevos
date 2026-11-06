@@ -1,0 +1,15 @@
+[package]
+name = "shardevos"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "shardevos"
+path = "binfmt_loader/mod.rs"
+crate-type = ["rlib"]
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
