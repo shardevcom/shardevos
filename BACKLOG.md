@@ -153,6 +153,74 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
+## 5. Fase 10 — VFS real, syscall exec y archivos de prueba
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F10-01 | VFS real — path resolution | `Vfs::resolve_path()` resuelve rutas como /foo/bar.txt recorriendo directorios | ✅ |
+| F10-02 | VFS real — lectura/escritura de datos | `Vfs::read()`/`write()` delegan a `shardevfs::read_data()`/`write_data()` con datos reales | ✅ |
+| F10-03 | Syscall exec (25) | `SYSCALL_EXEC` carga un ELF desde el VFS y salta a su entry point vía `binfmt_loader` | ✅ |
+| F10-04 | Salida por VGA | `vga_print_line()` escribe a 0xB8000; logo y mensajes de estado visibles en modo texto | ✅ |
+| F10-05 | Archivos de prueba | Kernel crea hello.txt, readme.txt, search_demo.txt en shardevfs al arrancar | ✅ |
+| F10-06 | Indexador con VFS real | `search.elf` indexa automáticamente los archivos de shardevfs al arrancar | ✅ |
+
+---
+
+## 5. Fase 11 — Protección de memoria y multi-tarea
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F11-01 | Paginación con protección U/S | Bit US en entradas de página para separar kernel de usuario | ⏳ |
+| F11-02 | Syscall fork | Crear procesos hijos con espacio de direcciones copiado | ⏳ |
+| F11-03 | Scheduler preemptivo | Tick del timer para cambio de contexto entre procesos | ⏳ |
+| F11-04 | Syscall wait | Esperar terminación de procesos hijos | ⏳ |
+| F11-05 | Manejo de señales | SIGKILL, SIGSTOP, SIGCONT para control de procesos | ⏳ |
+
+---
+
+## 5. Fase 12 — Drivers de dispositivo y red
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F12-01 | Driver de bloque real | Lectura/escritura de disco real vía IDE/NVMe/VirtIO | ⏳ |
+| F12-02 | Driver de red | Ethernet/WiFi mediante VirtIO-net o RTL8139 | ⏳ |
+| F12-03 | TCP/IP stack | TCP, UDP, IP, ARP, ICMP básicos | ⏳ |
+| F12-04 | Sistema de archivos en disco | shardevfs persistente en bloque real (no solo RAM) | ⏳ |
+
+---
+
+## 5. Fase 13 — UI gráfica y AI Engine real
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F13-01 | Servidor de display gráfico | Modo gráfico VGA/VESA con framebuffer | ⏳ |
+| F13-01 | Ventanero con decoraciones | Barras de título, botones, arrastre de ventanas | ⏳ |
+| F13-02 | AI Engine con modelo real | all-MiniLM-L6-v2 INT8 para embeddings en userspace | ⏳ |
+| F13-03 | SLM con Function Calling | Llama/TinyLlama para comandos de voz al SO | ⏳ |
+| F13-04 | STT/TTS locales | whisper.cpp + Piper compilados como ELF de usuario | ⏳ |
+
+---
+
+## 5. Fase 14 — Multiusuario y seguridad
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F14-01 | Sistema de usuarios y grupos | UID/GID, permisos rwx, archivo /etc/passwd | ⏳ |
+| F14-02 | Autenticación | Login por contraseña, sesiones de usuario | ⏳ |
+| F14-03 | Capabilities y sandbox | Restringir syscalls por proceso | ⏳ |
+
+---
+
+## 5. Fase 15 — Release v1.0.0
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F15-01 | ISO bootable v1.0.0 | Imagen de instalación con todos los componentes | ⏳ |
+| F15-02 | Documentación completa | Guía de usuario, referencia de syscalls, guía de desarrollador | ⏳ |
+| F15-03 | Pruebas de integración | Pruebas de arranque, multi-proceso, búsqueda, red | ⏳ |
+
+---
+
 ## 5. Comandos de Desarrollo
 
 ```bash

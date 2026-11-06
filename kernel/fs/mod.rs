@@ -1,18 +1,16 @@
-//! VFS — Sistema de Archivos Virtual del kernel shardevos.
+//! VFS + shardevfs — Sistema de archivos virtual y filesystem nativo de shardevos.
 //!
-//! Proporciona:
-//! - Abstracción de archivos, directorios e inodos
-//! - Montaje de múltiples sistemas de archivos
-//! - Operaciones de lectura/escritura/búsqueda unificadas
-//! - API para sistemas de archivos subyacentes (shardevfs, etc.)
-
-
-extern crate alloc;
+//! Este módulo combina:
+//! - VFS: Abstracción de archivos, path resolution, open/read/write/close
+//! - shardevfs: Filesystem nativo basado en bloques con superbloque, inodos, bitmap
 
 use alloc::vec::Vec;
+use core::cmp::min;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-mod shardevfs;
+// ============================================================================
+// Tipos básicos del VFS
+// ============================================================================
 
 /// Identificador único de archivo.
 pub type FileId = u64;
@@ -59,7 +57,7 @@ pub struct VfsInode {
     pub id: InodeId,
     pub node_type: VfsNodeType,
     pub size: u64,
-    pub data_blocks: [u64; 16],  // Bloques de datos directos
+    pub data_blocks: [u64; 16],
     pub atime_us: u64,
     pub mtime_us: u64,
     pub ctime_us: u64,
@@ -95,7 +93,7 @@ pub struct VfsFile {
     pub id: FileId,
     pub inode_id: InodeId,
     pub offset: u64,
-    pub flags: u32,       // O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, etc.
+    pub flags: u32,
     pub mount_id: MountId,
 }
 
@@ -109,7 +107,7 @@ const O_TRUNC: u32 = 0x0200;
 #[allow(dead_code)]
 const O_APPEND: u32 = 0x0400;
 
-/// Directorio del VFS (entrada de entrada de directorio).
+/// Entrada de directorio del VFS.
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct VfsDirEntry {
@@ -143,7 +141,7 @@ pub enum VfsError {
     InvalidPacket,
 }
 
-/// Traits para sistemas de archivos subyacentes.
+/// Trait para sistemas de archivos subyacentes.
 pub trait Filesystem: Send + Sync {
     fn name(&self) -> &str;
     fn mount(&mut self, mount_point: &str) -> VfsResult<MountId>;
@@ -159,7 +157,10 @@ pub trait Filesystem: Send + Sync {
     fn get_stat(&self, inode_id: InodeId) -> VfsResult<VfsStat>;
 }
 
-// SpinLock simple para VFS
+// ============================================================================
+// SpinLock
+// ============================================================================
+
 mod spin_lock_vfs {
     use core::sync::atomic::{AtomicUsize, Ordering};
     use core::cell::UnsafeCell;
@@ -213,8 +214,10 @@ mod spin_lock_vfs {
     }
 }
 
-/// Tabla de archivos abiertos.
-#[derive(Debug, Clone)]
+// ============================================================================
+// Tablas del VFS
+// ============================================================================
+
 pub struct OpenFileTable {
     files: [Option<VfsFile>; 256],
     count: usize,
@@ -269,19 +272,28 @@ impl OpenFileTable {
     }
 }
 
-/// Tabla de montajes.
-#[derive(Debug, Clone)]
 pub struct MountTable {
     mounts: [Option<MountEntry>; 64],
     count: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
 pub struct MountEntry {
     pub id: MountId,
     pub mount_point: [u8; 64],
     pub fs_name: [u8; 32],
     pub root_inode: InodeId,
+}
+
+impl MountEntry {
+    pub const fn new(id: MountId, mount_point: [u8; 64], fs_name: [u8; 32], root_inode: InodeId) -> Self {
+        Self { id, mount_point, fs_name, root_inode }
+    }
+}
+
+// MountEntry needs Copy for [None; 64] initialization
+impl Copy for MountEntry {}
+impl Clone for MountEntry {
+    fn clone(&self) -> Self { *self }
 }
 
 impl MountTable {
@@ -303,11 +315,8 @@ impl MountTable {
         Err(VfsError::OutOfMemory)
     }
 
-    pub fn find_by_path(&self, path: &str) -> Option<&MountEntry> {
-        self.mounts.iter().find_map(|m| m.as_ref().filter(|m| {
-            let mp = core::str::from_utf8(&m.mount_point).unwrap_or("");
-            path.starts_with(mp)
-        }))
+    pub fn find_root_inode(&self) -> Option<InodeId> {
+        self.mounts.iter().find_map(|m| m.as_ref()).map(|m| m.root_inode)
     }
 
     pub fn count(&self) -> usize {
@@ -315,8 +324,6 @@ impl MountTable {
     }
 }
 
-/// Tabla de inodos en memoria.
-#[derive(Debug, Clone)]
 pub struct InodeTable {
     inodes: [Option<VfsInode>; 1024],
     count: usize,
@@ -331,27 +338,28 @@ impl InodeTable {
         if self.count >= 1024 {
             return Err(VfsError::OutOfMemory);
         }
-        for slot in self.inodes.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(inode);
-                self.count += 1;
-                return Ok(self.inodes.iter().position(|i| i.is_some()).unwrap() as InodeId);
-            }
-        }
-        Err(VfsError::OutOfMemory)
+        let final_id = if inode.id != 0 && inode.id as usize <= 1024 && self.inodes[inode.id as usize - 1].is_none() {
+            inode.id
+        } else {
+            let next = self.inodes.iter().position(|i| i.is_none()).unwrap_or(0) + 1;
+            next as InodeId
+        };
+        let idx = (final_id - 1) as usize;
+        self.inodes[idx] = Some(inode);
+        self.count += 1;
+        Ok(final_id)
     }
 
     pub fn get(&self, id: InodeId) -> Option<&VfsInode> {
         self.inodes.get(id as usize).and_then(|i| i.as_ref())
     }
 
-    /// Devuelve el inodo en un índice dado del almacenamiento interno (para iteración).
-    pub fn entry_at(&self, index: usize) -> Option<&VfsInode> {
-        self.inodes.get(index).and_then(|i| i.as_ref())
-    }
-
     pub fn get_mut(&mut self, id: InodeId) -> Option<&mut VfsInode> {
         self.inodes.get_mut(id as usize).and_then(|i| i.as_mut())
+    }
+
+    pub fn entry_at(&self, index: usize) -> Option<&VfsInode> {
+        self.inodes.get(index).and_then(|i| i.as_ref())
     }
 
     pub fn count(&self) -> usize {
@@ -359,7 +367,10 @@ impl InodeTable {
     }
 }
 
-/// Sistema de archivos virtual del kernel.
+// ============================================================================
+// Estructura VFS principal
+// ============================================================================
+
 #[allow(dead_code)]
 pub struct Vfs {
     open_files: spin_lock_vfs::SpinLock<OpenFileTable>,
@@ -388,7 +399,6 @@ impl Vfs {
         self.initialized.load(Ordering::Acquire) != 0
     }
 
-    /// Monta un sistema de archivos en un punto de montaje.
     pub fn mount(&self, fs_name: &str, mount_point: &str, root_inode: InodeId) -> VfsResult<MountId> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
@@ -416,14 +426,12 @@ impl Vfs {
         Ok(id)
     }
 
-    /// Desmonta un sistema de archivos.
     pub fn unmount(&self, mount_id: MountId) -> VfsResult<()> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
         }
 
         let mut mounts = self.mounts.lock();
-        // Buscar y remover
         let idx = mounts.mounts.iter().position(|m| m.as_ref().map_or(false, |m| m.id == mount_id));
         match idx {
             Some(i) => {
@@ -435,45 +443,130 @@ impl Vfs {
         }
     }
 
-    /// Crea un archivo o directorio.
+    pub fn resolve_path(&self, path: &str) -> VfsResult<InodeId> {
+        if !self.is_initialized() {
+            return Err(VfsError::NotInitialized);
+        }
+
+        let path = path.trim();
+        if path.is_empty() || path == "/" {
+            let mounts = self.mounts.lock();
+            let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+            drop(mounts);
+            return Ok(root);
+        }
+
+        let mut current_inode: InodeId;
+        let mut remaining: &str;
+
+        if path.starts_with('/') {
+            let mounts = self.mounts.lock();
+            let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+            current_inode = root;
+            remaining = path.trim_start_matches('/');
+            drop(mounts);
+        } else {
+            let mounts = self.mounts.lock();
+            let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+            current_inode = root;
+            remaining = path;
+            drop(mounts);
+        }
+
+        let components: Vec<&str> = remaining.split('/').filter(|c| !c.is_empty()).collect();
+
+        for comp in components {
+            if comp == "." {
+                continue;
+            }
+            if comp == ".." {
+                let mounts = self.mounts.lock();
+                let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+                current_inode = root;
+                drop(mounts);
+                continue;
+            }
+
+            let shardevfs = global_shardevfs_mut();
+            let stat = shardevfs.get_stat(current_inode)?;
+            if stat.node_type != VfsNodeType::Directory {
+                return Err(VfsError::NotADirectory);
+            }
+
+            let found = self.shardevfs_lookup_child(current_inode, comp, shardevfs)?;
+            current_inode = found;
+        }
+
+        Ok(current_inode)
+    }
+
+    fn shardevfs_lookup_child(&self, parent_id: InodeId, name: &str, fs: &Shardevfs) -> VfsResult<InodeId> {
+        if parent_id == 1 {
+            let entries = fs.list_directory(parent_id)?;
+            for entry in entries.iter() {
+                let entry_name = core::str::from_utf8(&entry.name).unwrap_or("").trim_end_matches(char::from(0));
+                if entry_name == name {
+                    return Ok(entry.inode_id);
+                }
+            }
+        }
+        Err(VfsError::NotFound)
+    }
+
     pub fn create(&self, path: &str, node_type: VfsNodeType) -> VfsResult<InodeId> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
         }
 
-        // Encontrar el montaje correspondiente
-        let mounts = self.mounts.lock();
-        let mount = mounts.find_by_path(path).ok_or(VfsError::NotMounted)?;
-        let root_inode = mount.root_inode;
-        let mount_id = mount.id;
-        drop(mounts);
+        let (parent_path, name) = split_path(path);
+        if name.is_empty() {
+            return Err(VfsError::InvalidArgument);
+        }
 
-        // Crear inodo (delegar al filesystem subyacente en implementación completa)
-        // Por ahora, crear un inodo local
+        let parent_id = if parent_path.is_empty() || parent_path == "/" {
+            let mounts = self.mounts.lock();
+            let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+            drop(mounts);
+            root
+        } else {
+            self.resolve_path(parent_path)?
+        };
+
+        let shardevfs = global_shardevfs_mut();
+        let inode_id = shardevfs.create_inode(parent_id, name, node_type)?;
+
+        let stat = shardevfs.get_stat(inode_id)?;
+        let vfs_inode = VfsInode {
+            id: stat.inode_id,
+            node_type: stat.node_type,
+            size: stat.size,
+            data_blocks: [0; 16],
+            atime_us: stat.atime_us,
+            mtime_us: stat.mtime_us,
+            ctime_us: stat.ctime_us,
+            uid: stat.uid,
+            gid: stat.gid,
+            mode: stat.mode,
+            ref_count: 1,
+            mount_id: 1,
+        };
         let mut inodes = self.inodes.lock();
-        let mut name = [0u8; 64];
-        let pbytes = path.as_bytes();
-        let pcopy = pbytes.len().min(64);
-        name[..pcopy].copy_from_slice(&pbytes[..pcopy]);
+        inodes.insert(vfs_inode)?;
+        drop(inodes);
 
-        let inode = VfsInode::new(root_inode, node_type, mount_id);
-        let inode_id = inodes.insert(inode)?;
         Ok(inode_id)
     }
 
-    /// Abre un archivo existente.
     pub fn open(&self, path: &str, flags: u32) -> VfsResult<FileId> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
         }
 
-        // Buscar inodo por path (simplificado)
-        let inode_id = self.lookup(path)?;
+        let inode_id = self.resolve_path(path)?;
 
-        // Crear entrada en tabla de archivos abiertos
         let mut files = self.open_files.lock();
         let file = VfsFile {
-            id: 0, // Se asignará en insert
+            id: 0,
             inode_id,
             offset: 0,
             flags,
@@ -483,7 +576,6 @@ impl Vfs {
         Ok(file_id)
     }
 
-    /// Cierra un archivo abierto.
     pub fn close(&self, file_id: FileId) -> VfsResult<()> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
@@ -493,7 +585,6 @@ impl Vfs {
         files.remove(file_id)
     }
 
-    /// Lee de un archivo abierto.
     pub fn read(&self, file_id: FileId, buf: &mut [u8]) -> VfsResult<usize> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
@@ -506,29 +597,23 @@ impl Vfs {
             return Err(VfsError::PermissionDenied);
         }
 
-        // Leer del inodo
-        let mut inodes = self.inodes.lock();
-        let inode = inodes.get_mut(file.inode_id).ok_or(VfsError::NotFound)?;
+        let shardevfs = global_shardevfs_mut();
+        let stat = shardevfs.get_stat(file.inode_id)?;
         let offset = file.offset as usize;
-        let end = (offset + buf.len()).min(inode.size as usize);
-        if offset >= inode.size as usize {
+        if offset >= stat.size as usize {
             return Ok(0);
         }
 
-        let read_len = end - offset;
-        let buf_len = buf.len();
-        let read_buf = &mut buf[..read_len.min(buf_len)];
+        let read_len = min(offset + buf.len(), stat.size as usize) - offset;
+        let mut read_buf = [0u8; 4096];
+        let to_read = min(read_len, read_buf.len());
+        let actually_read = shardevfs.read_data(file.inode_id, file.offset, &mut read_buf[..to_read])?;
 
-        // Simular lectura (en producción: leer del dispositivo de bloque)
-        for b in read_buf.iter_mut() {
-            *b = 0;
-        }
-
-        file.offset += read_len as u64;
-        Ok(read_len)
+        buf[..actually_read].copy_from_slice(&read_buf[..actually_read]);
+        file.offset += actually_read as u64;
+        Ok(actually_read)
     }
 
-    /// Escribe en un archivo abierto.
     pub fn write(&self, file_id: FileId, buf: &[u8]) -> VfsResult<usize> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
@@ -541,100 +626,85 @@ impl Vfs {
             return Err(VfsError::PermissionDenied);
         }
 
-        // Escribir al inodo
-        let mut inodes = self.inodes.lock();
-        let inode = inodes.get_mut(file.inode_id).ok_or(VfsError::NotFound)?;
-        let offset = file.offset as usize;
-        let write_len = buf.len();
-        let new_size = (offset + write_len).max(inode.size as usize);
+        let shardevfs = global_shardevfs_mut();
+        let written = shardevfs.write_data(file.inode_id, file.offset, buf)?;
 
-        // Simular escritura
-        inode.size = new_size as u64;
-        inode.mtime_us = time_us();
-
-        file.offset += write_len as u64;
-        Ok(write_len)
+        file.offset += written as u64;
+        Ok(written)
     }
 
-    /// Busca un inodo por path.
-    pub fn lookup(&self, _path: &str) -> VfsResult<InodeId> {
-        if !self.is_initialized() {
-            return Err(VfsError::NotInitialized);
-        }
-
-        // Simplificado: buscar en tabla de inodos
-        let inodes = self.inodes.lock();
-        for i in 0..inodes.count {
-            if let Some(inode) = &inodes.inodes[i] {
-                // En implementación completa, comparar rutas
-                let _ = inode;
-            }
-        }
-        drop(inodes);
-
-        // Por ahora, devolver un inodo por defecto si existe
-        Err(VfsError::NotFound)
+    pub fn lookup(&self, path: &str) -> VfsResult<InodeId> {
+        self.resolve_path(path)
     }
 
-    /// Obtiene estadísticas de un inodo.
     pub fn stat(&self, inode_id: InodeId) -> VfsResult<VfsStat> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
         }
 
-        let inodes = self.inodes.lock();
-        let inode = inodes.get(inode_id).ok_or(VfsError::NotFound)?;
-
-        Ok(VfsStat {
-            inode_id: inode.id,
-            node_type: inode.node_type,
-            size: inode.size,
-            blocks: (inode.size + 4095) / 4096,
-            atime_us: inode.atime_us,
-            mtime_us: inode.mtime_us,
-            ctime_us: inode.ctime_us,
-            uid: inode.uid,
-            gid: inode.gid,
-            mode: inode.mode,
-        })
+        let shardevfs = global_shardevfs_mut();
+        shardevfs.get_stat(inode_id)
     }
 
-    /// Elimina un archivo o directorio.
     pub fn unlink(&self, path: &str) -> VfsResult<()> {
         if !self.is_initialized() {
             return Err(VfsError::NotInitialized);
         }
 
-        let inode_id = self.lookup(path)?;
+        let (parent_path, name) = split_path(path);
+        if name.is_empty() {
+            return Err(VfsError::InvalidArgument);
+        }
 
-        // Remover de tabla de inodos
-        let mut inodes = self.inodes.lock();
-        inodes.inodes[inode_id as usize] = None;
-        Ok(())
+        let parent_id = if parent_path.is_empty() || parent_path == "/" {
+            let mounts = self.mounts.lock();
+            let root = mounts.find_root_inode().ok_or(VfsError::NotMounted)?;
+            drop(mounts);
+            root
+        } else {
+            self.resolve_path(parent_path)?
+        };
+
+        let shardevfs = global_shardevfs_mut();
+        shardevfs.delete_inode(parent_id, name)
     }
 
-    /// Devuelve el número de archivos abiertos.
     pub fn open_file_count(&self) -> usize {
         self.open_files.lock().count()
     }
 
-    /// Devuelve el número de montajes.
     pub fn mount_count(&self) -> usize {
         self.mounts.lock().count()
     }
 
-    /// Devuelve el número de inodos.
     pub fn inode_count(&self) -> usize {
         self.inodes.lock().count
     }
 
-    /// Devuelve una copia del inodo en un índice dado (VfsInode es Copy).
     pub fn inode_entry_at(&self, index: usize) -> Option<VfsInode> {
         self.inodes.lock().entry_at(index).copied()
     }
 }
 
-/// Tiempo actual en microsegundos.
+fn split_path(path: &str) -> (&str, &str) {
+    let path = path.trim_end_matches('/');
+    if path == "/" || path.is_empty() {
+        return ("", "");
+    }
+
+    if let Some(pos) = path.rfind('/') {
+        let parent = &path[..pos];
+        let name = &path[pos + 1..];
+        if parent.is_empty() {
+            ("/", name)
+        } else {
+            (parent, name)
+        }
+    } else {
+        ("/", path)
+    }
+}
+
 fn time_us() -> u64 {
     static mut TIME_COUNTER: u64 = 0;
     unsafe {
@@ -643,14 +713,356 @@ fn time_us() -> u64 {
     }
 }
 
-/// Instancia global del VFS.
+// ============================================================================
+// Instancias globales
+// ============================================================================
+
 static mut VFS: Vfs = Vfs::new();
 
-/// Devuelve una referencia mutable al VFS global.
 #[allow(static_mut_refs)]
 pub fn global_vfs() -> &'static mut Vfs {
     unsafe { &mut VFS }
 }
+
+pub unsafe fn global_shardevfs_init() {
+    global_shardevfs_mut().init();
+}
+
+// ============================================================================
+// shardevfs — Filesystem nativo integrado
+// ============================================================================
+
+const SHARDEVFS_MAGIC: u32 = 0x53484152;
+const BLOCK_SIZE: usize = 4096;
+const MAX_INODES: usize = 256;
+const MAX_DATA_BLOCKS: usize = 1024;
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+#[allow(dead_code)]
+pub struct Superblock {
+    pub magic: u32,
+    pub version: u32,
+    pub block_size: u32,
+    pub max_inodes: u32,
+    pub max_data_blocks: u32,
+    pub inode_bitmap_block: u32,
+    pub data_bitmap_block: u32,
+    pub inode_table_block: u32,
+    pub data_region_block: u32,
+    pub root_inode_id: InodeId,
+    pub created_at_us: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+#[allow(dead_code)]
+pub struct DiskDirEntry {
+    pub name: [u8; 64],
+    pub inode_id: InodeId,
+    pub node_type: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+#[allow(dead_code)]
+pub struct DiskInode {
+    pub id: InodeId,
+    pub node_type: u8,
+    pub size: u64,
+    pub data_blocks: [u64; 16],
+    pub atime_us: u64,
+    pub mtime_us: u64,
+    pub ctime_us: u64,
+    pub uid: u32,
+    pub gid: u32,
+    pub mode: u32,
+}
+
+#[allow(dead_code)]
+pub struct Shardevfs {
+    superblock: Superblock,
+    inode_bitmap: [u8; 32],
+    data_bitmap: [u8; 128],
+    inodes: [DiskInode; MAX_INODES],
+    root_entries: [DiskDirEntry; 64],
+    root_entry_count: usize,
+    data_store: [u8; 65536],
+    initialized: AtomicU64,
+}
+
+impl Shardevfs {
+    pub const fn new() -> Self {
+        Self {
+            superblock: Superblock {
+                magic: SHARDEVFS_MAGIC,
+                version: 1,
+                block_size: BLOCK_SIZE as u32,
+                max_inodes: MAX_INODES as u32,
+                max_data_blocks: MAX_DATA_BLOCKS as u32,
+                inode_bitmap_block: 1,
+                data_bitmap_block: 2,
+                inode_table_block: 3,
+                data_region_block: 4,
+                root_inode_id: 1,
+                created_at_us: 0,
+            },
+            inode_bitmap: [0; 32],
+            data_bitmap: [0; 128],
+            inodes: [DiskInode {
+                id: 0, node_type: 0, size: 0, data_blocks: [0; 16],
+                atime_us: 0, mtime_us: 0, ctime_us: 0,
+                uid: 0, gid: 0, mode: 0,
+            }; MAX_INODES],
+            root_entries: [DiskDirEntry {
+                name: [0; 64], inode_id: 0, node_type: 0,
+            }; 64],
+            root_entry_count: 0,
+            data_store: [0; 65536],
+            initialized: AtomicU64::new(0),
+        }
+    }
+
+    pub unsafe fn init(&mut self) {
+        self.initialized.store(1, Ordering::Release);
+        let root = DiskInode {
+            id: 1, node_type: VfsNodeType::Directory as u8, size: 0,
+            data_blocks: [0; 16], atime_us: time_us(), mtime_us: time_us(),
+            ctime_us: time_us(), uid: 0, gid: 0, mode: 0o755,
+        };
+        self.inodes[0] = root;
+        self.inode_bitmap[0] |= 0x01;
+        self.superblock.root_inode_id = 1;
+        self.superblock.created_at_us = time_us();
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire) != 0
+    }
+
+    fn alloc_inode(&mut self) -> Result<InodeId, VfsError> {
+        for i in 0..MAX_INODES {
+            let byte_idx = i / 8;
+            let bit_idx = i % 8;
+            if self.inode_bitmap[byte_idx] & (1 << bit_idx) == 0 {
+                self.inode_bitmap[byte_idx] |= 1 << bit_idx;
+                return Ok(i as InodeId + 1);
+            }
+        }
+        Err(VfsError::NoSpace)
+    }
+
+    fn free_inode(&mut self, inode_id: InodeId) {
+        if inode_id == 0 || inode_id > MAX_INODES as InodeId { return; }
+        let idx = (inode_id - 1) as usize;
+        let byte_idx = idx / 8;
+        let bit_idx = idx % 8;
+        self.inode_bitmap[byte_idx] &= !(1 << bit_idx);
+    }
+
+    fn alloc_data_block(&mut self) -> Result<u64, VfsError> {
+        for i in 0..MAX_DATA_BLOCKS {
+            let byte_idx = i / 8;
+            let bit_idx = i % 8;
+            if self.data_bitmap[byte_idx] & (1 << bit_idx) == 0 {
+                self.data_bitmap[byte_idx] |= 1 << bit_idx;
+                return Ok(i as u64 + 4);
+            }
+        }
+        Err(VfsError::NoSpace)
+    }
+
+    fn find_dir_entry(&self, name: &str) -> Option<&DiskDirEntry> {
+        for i in 0..self.root_entry_count {
+            let entry_name = core::str::from_utf8(&self.root_entries[i].name).unwrap_or("");
+            let entry_name_trimmed = entry_name.trim_end_matches(char::from(0));
+            if entry_name_trimmed == name {
+                return Some(&self.root_entries[i]);
+            }
+        }
+        None
+    }
+
+    fn add_dir_entry(&mut self, name: &str, inode_id: InodeId, node_type: VfsNodeType) -> Result<(), VfsError> {
+        if self.root_entry_count >= 64 {
+            return Err(VfsError::NoSpace);
+        }
+        let mut name_arr = [0u8; 64];
+        let bytes = name.as_bytes();
+        let copy_len = bytes.len().min(64);
+        name_arr[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        self.root_entries[self.root_entry_count] = DiskDirEntry {
+            name: name_arr, inode_id, node_type: node_type as u8,
+        };
+        self.root_entry_count += 1;
+        Ok(())
+    }
+}
+
+impl Filesystem for Shardevfs {
+    fn name(&self) -> &str { "shardevfs" }
+
+    fn mount(&mut self, _mount_point: &str) -> VfsResult<MountId> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        Ok(1)
+    }
+
+    fn unmount(&mut self, _mount_id: MountId) -> VfsResult<()> { Ok(()) }
+
+    fn create_inode(&mut self, _parent_id: InodeId, name: &str, node_type: VfsNodeType) -> VfsResult<InodeId> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if self.find_dir_entry(name).is_some() { return Err(VfsError::AlreadyExists); }
+        let inode_id = self.alloc_inode()?;
+        let disk_inode = DiskInode {
+            id: inode_id, node_type: node_type as u8, size: 0,
+            data_blocks: [0; 16], atime_us: time_us(), mtime_us: time_us(),
+            ctime_us: time_us(), uid: 0, gid: 0,
+            mode: match node_type { VfsNodeType::Directory => 0o755, _ => 0o644 },
+        };
+        self.inodes[inode_id as usize - 1] = disk_inode;
+        self.add_dir_entry(name, inode_id, node_type)?;
+        Ok(inode_id)
+    }
+
+    fn lookup_inode(&self, _parent_id: InodeId, name: &str) -> VfsResult<InodeId> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if let Some(entry) = self.find_dir_entry(name) { Ok(entry.inode_id) } else { Err(VfsError::NotFound) }
+    }
+
+    fn read_inode(&self, inode_id: InodeId) -> VfsResult<VfsInode> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode_id == 0 || inode_id > MAX_INODES as InodeId { return Err(VfsError::NotFound); }
+        let disk_inode = &self.inodes[inode_id as usize - 1];
+        if disk_inode.id == 0 { return Err(VfsError::NotFound); }
+        Ok(VfsInode {
+            id: disk_inode.id,
+            node_type: match disk_inode.node_type { 0=>VfsNodeType::RegularFile, 1=>VfsNodeType::Directory, 2=>VfsNodeType::Symlink, 3=>VfsNodeType::CharacterDevice, 4=>VfsNodeType::BlockDevice, 5=>VfsNodeType::Socket, 6=>VfsNodeType::Fifo, _=>VfsNodeType::RegularFile },
+            size: disk_inode.size, data_blocks: disk_inode.data_blocks,
+            atime_us: disk_inode.atime_us, mtime_us: disk_inode.mtime_us, ctime_us: disk_inode.ctime_us,
+            uid: disk_inode.uid, gid: disk_inode.gid, mode: disk_inode.mode,
+            ref_count: 1, mount_id: 1,
+        })
+    }
+
+    fn write_inode(&mut self, inode: &VfsInode) -> VfsResult<()> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode.id == 0 || inode.id > MAX_INODES as InodeId { return Err(VfsError::NotFound); }
+        let disk_inode = &mut self.inodes[inode.id as usize - 1];
+        disk_inode.id = inode.id; disk_inode.node_type = inode.node_type as u8;
+        disk_inode.size = inode.size; disk_inode.data_blocks = inode.data_blocks;
+        disk_inode.atime_us = inode.atime_us; disk_inode.mtime_us = inode.mtime_us;
+        disk_inode.ctime_us = inode.ctime_us; disk_inode.uid = inode.uid;
+        disk_inode.gid = inode.gid; disk_inode.mode = inode.mode;
+        Ok(())
+    }
+
+    fn read_data(&self, inode_id: InodeId, offset: u64, buf: &mut [u8]) -> VfsResult<usize> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode_id == 0 || inode_id > MAX_INODES as InodeId { return Err(VfsError::NotFound); }
+        let disk_inode = &self.inodes[inode_id as usize - 1];
+        if disk_inode.id == 0 { return Err(VfsError::NotFound); }
+        if disk_inode.node_type != VfsNodeType::RegularFile as u8 { return Err(VfsError::InvalidArgument); }
+        let offset = offset as usize;
+        if offset >= disk_inode.size as usize { return Ok(0); }
+        let read_len = (offset + buf.len()).min(disk_inode.size as usize) - offset;
+        buf[..read_len].copy_from_slice(&self.data_store[offset..offset + read_len]);
+        Ok(read_len)
+    }
+
+    fn write_data(&mut self, inode_id: InodeId, offset: u64, buf: &[u8]) -> VfsResult<usize> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode_id == 0 || inode_id > MAX_INODES as InodeId { return Err(VfsError::NotFound); }
+        {
+            let disk_inode = &self.inodes[inode_id as usize - 1];
+            if disk_inode.id == 0 { return Err(VfsError::NotFound); }
+            if disk_inode.node_type != VfsNodeType::RegularFile as u8 { return Err(VfsError::InvalidArgument); }
+        }
+        let offset = offset as usize;
+        let write_len = buf.len();
+        let new_size = (offset + write_len).max(self.inodes[inode_id as usize - 1].size as usize);
+        let blocks_needed = (new_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let mut new_blocks: [u64; 16] = [0; 16];
+        let mut blocks_allocated = 0;
+        for i in 0..16 {
+            let di = &self.inodes[inode_id as usize - 1];
+            if di.data_blocks[i] != 0 {
+                new_blocks[i] = di.data_blocks[i];
+            } else if blocks_allocated < blocks_needed {
+                let block = self.alloc_data_block()?;
+                new_blocks[i] = block;
+                blocks_allocated += 1;
+            }
+        }
+        self.data_store[offset..offset + write_len].copy_from_slice(buf);
+        let disk_inode = &mut self.inodes[inode_id as usize - 1];
+        disk_inode.data_blocks = new_blocks;
+        disk_inode.size = new_size as u64;
+        disk_inode.mtime_us = time_us();
+        Ok(write_len)
+    }
+
+    fn list_directory(&self, inode_id: InodeId) -> VfsResult<Vec<VfsDirEntry>> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode_id != 1 { return Err(VfsError::NotADirectory); }
+        let mut entries = Vec::new();
+        for i in 0..self.root_entry_count {
+            entries.push(VfsDirEntry {
+                name: self.root_entries[i].name,
+                inode_id: self.root_entries[i].inode_id,
+                node_type: match self.root_entries[i].node_type {
+                    0=>VfsNodeType::RegularFile, 1=>VfsNodeType::Directory, 2=>VfsNodeType::Symlink,
+                    3=>VfsNodeType::CharacterDevice, 4=>VfsNodeType::BlockDevice, 5=>VfsNodeType::Socket, 6=>VfsNodeType::Fifo,
+                    _=>VfsNodeType::RegularFile,
+                },
+            });
+        }
+        Ok(entries)
+    }
+
+    fn delete_inode(&mut self, _parent_id: InodeId, name: &str) -> VfsResult<()> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        let entry_idx = (0..self.root_entry_count).find(|i| {
+            let name_str = core::str::from_utf8(&self.root_entries[*i].name).unwrap_or("");
+            name_str.trim_end_matches(char::from(0)) == name
+        });
+        match entry_idx {
+            Some(idx) => {
+                let inode_id = self.root_entries[idx].inode_id;
+                self.free_inode(inode_id);
+                self.root_entries[idx] = self.root_entries[self.root_entry_count - 1];
+                self.root_entry_count -= 1;
+                Ok(())
+            }
+            None => Err(VfsError::NotFound),
+        }
+    }
+
+    fn get_stat(&self, inode_id: InodeId) -> VfsResult<VfsStat> {
+        if !self.is_initialized() { return Err(VfsError::NotInitialized); }
+        if inode_id == 0 || inode_id > MAX_INODES as InodeId { return Err(VfsError::NotFound); }
+        let disk_inode = &self.inodes[inode_id as usize - 1];
+        if disk_inode.id == 0 { return Err(VfsError::NotFound); }
+        Ok(VfsStat {
+            inode_id: disk_inode.id,
+            node_type: match disk_inode.node_type { 0=>VfsNodeType::RegularFile, 1=>VfsNodeType::Directory, 2=>VfsNodeType::Symlink, 3=>VfsNodeType::CharacterDevice, 4=>VfsNodeType::BlockDevice, 5=>VfsNodeType::Socket, 6=>VfsNodeType::Fifo, _=>VfsNodeType::RegularFile },
+            size: disk_inode.size,
+            blocks: (disk_inode.size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+            atime_us: disk_inode.atime_us, mtime_us: disk_inode.mtime_us, ctime_us: disk_inode.ctime_us,
+            uid: disk_inode.uid, gid: disk_inode.gid, mode: disk_inode.mode,
+        })
+    }
+}
+
+static mut SHARDEVFS: Shardevfs = Shardevfs::new();
+
+#[allow(dead_code)]
+pub fn global_shardevfs_mut() -> &'static mut Shardevfs {
+    unsafe { &mut SHARDEVFS }
+}
+
+// ============================================================================
+// Pruebas
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -678,6 +1090,7 @@ mod tests {
         assert!(!vfs.is_initialized());
         assert_eq!(vfs.open_file_count(), 0);
         assert_eq!(vfs.mount_count(), 0);
+        assert_eq!(vfs.inode_count(), 0);
     }
 
     #[test]
@@ -691,20 +1104,11 @@ mod tests {
     fn open_file_table() {
         let mut table = OpenFileTable::new();
         assert_eq!(table.count(), 0);
-
-        let file = VfsFile {
-            id: 0,
-            inode_id: 1,
-            offset: 0,
-            flags: O_RDONLY,
-            mount_id: 0,
-        };
+        let file = VfsFile { id: 0, inode_id: 1, offset: 0, flags: O_RDONLY, mount_id: 0 };
         let id = table.insert(file).unwrap();
         assert_eq!(table.count(), 1);
-
         let f = table.get(id).unwrap();
         assert_eq!(f.inode_id, 1);
-
         table.remove(id).unwrap();
         assert_eq!(table.count(), 0);
     }
@@ -713,18 +1117,9 @@ mod tests {
     fn mount_table() {
         let mut table = MountTable::new();
         assert_eq!(table.count(), 0);
-
-        let mut mp = [0u8; 64];
-        mp[0..4].copy_from_slice(b"/mnt");
-        let mut fs = [0u8; 32];
-        fs[0..6].copy_from_slice(b"ext4\0\0");
-
-        let id = table.insert(MountEntry {
-            id: 1,
-            mount_point: mp,
-            fs_name: fs,
-            root_inode: 1,
-        }).unwrap();
+        let mut mp = [0u8; 64]; mp[0..4].copy_from_slice(b"/mnt");
+        let mut fs = [0u8; 32]; fs[0..6].copy_from_slice(b"ext4\0\0");
+        let id = table.insert(MountEntry { id: 1, mount_point: mp, fs_name: fs, root_inode: 1 }).unwrap();
         assert_eq!(id, 1);
         assert_eq!(table.count(), 1);
     }
@@ -733,11 +1128,9 @@ mod tests {
     fn inode_table() {
         let mut table = InodeTable::new();
         assert_eq!(table.count(), 0);
-
         let inode = VfsInode::new(1, VfsNodeType::Directory, 0);
         let id = table.insert(inode).unwrap();
         assert_eq!(table.count(), 1);
-
         let retrieved = table.get(id).unwrap();
         assert_eq!(retrieved.id, 1);
     }
@@ -751,9 +1144,60 @@ mod tests {
 
     #[test]
     fn open_flags() {
-        assert_eq!(O_RDONLY, 0);
-        assert_eq!(O_WRONLY, 1);
-        assert_eq!(O_RDWR, 2);
-        assert_eq!(O_CREAT, 0x40);
+        assert_eq!(O_RDONLY, 0); assert_eq!(O_WRONLY, 1);
+        assert_eq!(O_RDWR, 2); assert_eq!(O_CREAT, 0x40);
+    }
+
+    #[test]
+    fn split_path_tests() {
+        assert_eq!(split_path("/foo/bar.txt"), ("/foo", "bar.txt"));
+        assert_eq!(split_path("/"), ("", ""));
+        assert_eq!(split_path(""), ("", ""));
+        assert_eq!(split_path("file.txt"), ("/", "file.txt"));
+        assert_eq!(split_path("/foo/"), ("/foo", ""));
+    }
+
+    #[test]
+    fn shardevfs_init() {
+        let mut fs = Shardevfs::new();
+        unsafe { fs.init(); }
+        assert!(fs.is_initialized());
+    }
+
+    #[test]
+    fn shardevfs_create_and_lookup() {
+        let mut fs = Shardevfs::new();
+        unsafe { fs.init(); }
+        let inode_id = fs.create_inode(1, "test.txt", VfsNodeType::RegularFile).unwrap();
+        assert_eq!(inode_id, 2);
+        let found = fs.lookup_inode(1, "test.txt").unwrap();
+        assert_eq!(found, inode_id);
+        let result = fs.create_inode(1, "test.txt", VfsNodeType::RegularFile);
+        assert_eq!(result, Err(VfsError::AlreadyExists));
+    }
+
+    #[test]
+    fn shardevfs_read_write() {
+        let mut fs = Shardevfs::new();
+        unsafe { fs.init(); }
+        let inode_id = fs.create_inode(1, "data.bin", VfsNodeType::RegularFile).unwrap();
+        let write_data = b"Hello, shardevfs!";
+        let written = fs.write_data(inode_id, 0, write_data).unwrap();
+        assert_eq!(written, write_data.len());
+        let mut read_buf = [0u8; 32];
+        let read = fs.read_data(inode_id, 0, &mut read_buf).unwrap();
+        assert_eq!(read, write_data.len());
+        assert_eq!(&read_buf[..read], write_data);
+    }
+
+    #[test]
+    fn shardevfs_list_directory() {
+        let mut fs = Shardevfs::new();
+        unsafe { fs.init(); }
+        fs.create_inode(1, "file1.txt", VfsNodeType::RegularFile).unwrap();
+        fs.create_inode(1, "file2.txt", VfsNodeType::RegularFile).unwrap();
+        fs.create_inode(1, "subdir", VfsNodeType::Directory).unwrap();
+        let entries = fs.list_directory(1).unwrap();
+        assert_eq!(entries.len(), 3);
     }
 }

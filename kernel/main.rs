@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+use crate::fs::Filesystem;
+
 pub mod ai_engine;
 #[path = "arch/x86_64/mod.rs"]
 pub mod arch;
@@ -78,6 +80,22 @@ pub extern "C" fn kernel_main() -> ! {
     // Inicializar subsistema de syscalls
     unsafe {
         crate::syscall::init();
+    }
+
+    // Inicializar VFS y montar shardevfs en la raíz (/)
+    unsafe {
+        crate::fs::global_vfs().init();
+        crate::fs::global_shardevfs_init();
+        let _ = crate::fs::global_vfs().mount("shardevfs", "/", 1);
+
+        // Crear archivos de prueba en shardevfs para indexación/búsqueda
+        let fs = crate::fs::global_shardevfs_mut();
+        let _ = fs.create_inode(1, "hello.txt", crate::fs::VfsNodeType::RegularFile);
+        let _ = fs.write_data(2, 0, b"Hello, ShardevOS! Este es un archivo de prueba para indexacion y busqueda semantica.");
+        let _ = fs.create_inode(1, "readme.txt", crate::fs::VfsNodeType::RegularFile);
+        let _ = fs.write_data(3, 0, b"ShardevOS - Sistema Operativo Inteligente v0.1.0. Escrito en Rust + Assembly x86_64.");
+        let _ = fs.create_inode(1, "search_demo.txt", crate::fs::VfsNodeType::RegularFile);
+        let _ = fs.write_data(4, 0, b"Buscador semantico de archivos con indexacion vectorial y similitud de coseno.");
     }
 
     // Dibujar borde superior y logo con color azul claro (0x1F)

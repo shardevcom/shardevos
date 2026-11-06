@@ -9,10 +9,11 @@
 use core::arch::asm;
 
 // Acceso al Unified Input Manager y VFS a través del crate root
-use crate::fs::global_vfs;
-use crate::fs::VfsNodeType;
+use crate::fs::{global_vfs, Filesystem, VfsNodeType};
+use crate::fs::global_shardevfs_mut;
 use crate::input::global_manager;
 use crate::input::{InputError as InputMgrError, InputEvent as InputMgrEvent};
+use crate::userland_loader::load_and_run_userland;
 
 // Stub de ensamblador que escribe los MSRs de syscall/sysret (IA32_LSTAR/LSS/EFLAGS)
 extern "C" {
@@ -87,6 +88,7 @@ pub const SYSCALL_INPUT_READ: SyscallNr = 21;
 pub const SYSCALL_INPUT_POLL: SyscallNr = 22;
 pub const SYSCALL_VFS_LIST: SyscallNr = 23;
 pub const SYSCALL_VFS_READ_BY_INODE: SyscallNr = 24;
+pub const SYSCALL_EXEC: SyscallNr = 25;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -393,6 +395,56 @@ fn sys_vfs_read_by_inode(args: SyscallArgs) -> SyscallResult {
     Ok(read_len)
 }
 
+/// Ejecuta un binario ELF desde el VFS.
+/// arg1: ptr a path en memoria; arg2: longitud del path.
+/// Carga el ELF y salta a su entry point (no retorna en caso de éxito).
+fn sys_exec(args: SyscallArgs) -> SyscallResult {
+    let path_ptr = args.arg1 as *const u8;
+    let path_len = args.arg2;
+    if path_ptr.is_null() || path_len == 0 || path_len > 256 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    // Copiar el path desde memoria de usuario
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let path_str = core::str::from_utf8(path_bytes).map_err(|_| SyscallError::InvalidArgument)?;
+
+    // Resolver path en el VFS
+    let vfs = global_vfs();
+    let inode_id = vfs.lookup(path_str).map_err(|_| SyscallError::InvalidArgument)?;
+
+    // Obtener tamaño del archivo
+    let stat = vfs.stat(inode_id).map_err(|_| SyscallError::InvalidArgument)?;
+    if stat.node_type != VfsNodeType::RegularFile {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let file_size = stat.size as usize;
+    if file_size == 0 || file_size > 65536 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    // Leer contenido completo del archivo
+    let mut file_buf = [0u8; 65536];
+    let mut offset: usize = 0;
+    let shardevfs = global_shardevfs_mut();
+    while offset < file_size {
+        let to_read = (file_size - offset).min(4096);
+        let read = shardevfs.read_data(inode_id, offset as u64, &mut file_buf[offset..offset + to_read]).map_err(|_| SyscallError::Fault)?;
+        if read == 0 {
+            break;
+        }
+        offset += read;
+    }
+
+    // Ejecutar el binario ELF (no retorna)
+    load_and_run_userland(&file_buf[..offset]);
+
+    // Si por alguna razón retorna, hacer loop
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 // ============================================================================
 // Entrada de syscall desde modo usuario (x86_64)
 // ============================================================================
@@ -459,6 +511,7 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_INPUT_POLL, sys_input_poll);
     let _ = register(SYSCALL_VFS_LIST, sys_vfs_list);
     let _ = register(SYSCALL_VFS_READ_BY_INODE, sys_vfs_read_by_inode);
+    let _ = register(SYSCALL_EXEC, sys_exec);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel

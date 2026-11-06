@@ -103,7 +103,43 @@ Para instalar en VirtualBox:
 
 ---
 
-## 8. Fase 9 — Búsqueda e indexación de archivos con IA
+## 8. Fase 10 — VFS real, syscall exec y archivos de prueba
+
+### 8.1 VFS real con path resolution
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `Vfs::resolve_path()` | `kernel/fs/mod.rs` | Resuelve rutas como `/foo/bar.txt` recorriendo directorios |
+| `Vfs::lookup()` | `kernel/fs/mod.rs` | Busca inodo por path |
+| `Vfs::create()` | `kernel/fs/mod.rs` | Crea archivo/directorio en path dado |
+| `Vfs::read()`/`write()` | `kernel/fs/mod.rs` | Lee/escribe datos reales vía shardevfs |
+| `Vfs::stat()` | `kernel/fs/mod.rs` | Obtiene metadatos de inodo |
+
+### 8.2 Syscall exec (25)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `SYSCALL_EXEC` | `kernel/syscall/mod.rs` | Número de syscall 25 |
+| `sys_exec()` | `kernel/syscall/mod.rs` | Carga ELF desde VFS y salta a entry point |
+| `load_and_run_userland()` | `kernel/userland_loader.rs` | Carga ELF64 y ejecuta en modo usuario |
+
+### 8.3 Archivos de prueba creados al arrancar
+
+| Archivo | Contenido |
+|---------|-----------|
+| `/hello.txt` | "Hello, ShardevOS! Este es un archivo de prueba para indexación y búsqueda semántica." |
+| `/readme.txt` | "ShardevOS - Sistema Operativo Inteligente v0.1.0. Escrito en Rust + Assembly x86_64." |
+| `/search_demo.txt` | "Buscador semántico de archivos con indexación vectorial y similitud de coseno." |
+
+### 8.4 Estado de validación
+
+- Kernel compila con VFS real, shardevfs integrado, syscall exec (25)
+- `search.elf` embebido en el kernel, se ejecuta al arrancar
+- Indexador automático usa `sys_vfs_list` + `sys_vfs_read_by_inode` para indexar archivos de shardevfs
+- Los 10 tests de `binfmt_loader` siguen pasando
+
+---
+
 
 ### 8.1 Arquitectura
 
