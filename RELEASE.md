@@ -1,7 +1,7 @@
-# shardevos — Release v1.1.0
+# shardevos — Release v1.2.0
 
 > **shardevos** — Sistema Operativo Inteligente de Kernel Unificado  
-> Versión: 1.1.0 (Release estable con persistencia y red)  
+> Versión: 1.2.0 (Release estable con syscalls de red para userspace)  
 > Fecha: Noviembre 2026  
 > Arquitectura: Kernel monolítico modular en Rust (`no_std`) + Assembly x86_64  
 > Repositorio: git@github.com:shardevcom/shardevos.git  
@@ -30,11 +30,12 @@ Esta release **v1.1.0** añade persistencia de archivos en disco real, conectivi
 | **Syscalls de bloque** | `sys_block_read/write` | Números 27 y 28 para acceso directo a disco desde userspace |
 | **Red** | VirtIO-Net real | Protocolo VirtIO 1.0 sobre MMIO, colas RX/TX, envío/recepción de paquetes Ethernet |
 | **Stack TCP/IP** | ARP + ICMP | Resolución de direcciones MAC (ARP), echo request/reply (ping), encabezado IPv4 |
+| **Syscalls de red** | `socket/bind/connect/send/recv/close/ping` | Números 36-42 para acceso a red desde userspace |
 | **Interfaz gráfica** | UI Responsiva VESA | Modo gráfico 800x600@32 RGBA, framebuffer LFB, primitivas de dibujo, texto 8x8, barra de título |
 | **Búsqueda IA** | Indexador semántico | Indexa archivos por contenido, búsqueda top-5 por similitud de coseno, embeddings placeholder |
 | **Seguridad** | Multiusuario | Usuarios/grupos (/etc/passwd, /etc/group), autenticación por contraseña, permisos rwx estilo Unix |
 | **Syscalls de seguridad** | `getuid`/`login`/`setuid`/`setgid` | Números 29-35 para gestión de identidad y autenticación |
-| **Total de syscalls** | 35 | Desde `exit` (1) hasta `setgid` (35) |
+| **Total de syscalls** | 42 | Desde `exit` (1) hasta `net_ping` (42) |
 
 ---
 
@@ -134,7 +135,7 @@ shardevos/
 │   │   ├── users.rs              # Gestión de usuarios/grupos, autenticación
 │   │   └── permissions.rs        # Permisos rwx estilo Unix, check_access, can_chown/chmod
 │   ├── syscall/
-│   │   ├── mod.rs                # 35 syscalls unificados + dispatch table
+│   │   ├── mod.rs                # 42 syscalls unificados + dispatch table
 │   │   └── syscall_entry.asm     # Stub syscall/sysret
 │   ├── ui_manager/
 │   │   ├── mod.rs                # Servidor de display, WindowManager, DisplayServer
@@ -199,7 +200,7 @@ cd /home/elber/shardevos
 # Compilar y ejecutar en QEMU
 ./build/build.sh run
 
-# Compilar y crear imagen ISO booteable v1.1.0
+# Compilar y crear imagen ISO booteable v1.2.0
 ./build/build.sh iso
 
 # Compilar y ejecutar todo
@@ -285,6 +286,13 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 | 33 | `sys_login` | Autenticar usuario |
 | 34 | `sys_setuid` | Establecer UID efectivo (solo root) |
 | 35 | `sys_setgid` | Establecer GID efectivo (solo root) |
+| 36 | `sys_net_socket` | Crear socket (Stream/Datagram) |
+| 37 | `sys_net_bind` | Asociar socket a puerto local |
+| 38 | `sys_net_connect` | Conectar socket a dirección remota |
+| 39 | `sys_net_send` | Enviar datos por socket |
+| 40 | `sys_net_recv` | Recibir datos de socket |
+| 41 | `sys_net_close` | Cerrar socket |
+| 42 | `sys_net_ping` | Enviar ICMP echo request |
 
 ---
 

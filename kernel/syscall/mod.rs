@@ -7,6 +7,7 @@
 //! - API de registro de manejadores por número de syscall
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 // Acceso al Unified Input Manager y VFS a través del crate root
 use crate::fs::{global_vfs, Filesystem, VfsNodeType};
@@ -18,8 +19,10 @@ use crate::security::{
     global_user_manager, init_user_manager, SecurityContext, ROOT_UID, ROOT_GID,
     NOBODY_UID, NOBODY_GID,
 };
+use crate::net::stack::{icmp_echo_request, ip_send, is_initialized as net_is_initialized};
 use crate::userland_loader::load_and_run_userland;
 use crate::virtio_blk::global_virtio_blk;
+use crate::virtio_net::global_virtio_net;
 
 // Contexto de seguridad global del proceso actual (solo un hilo en esta etapa)
 static mut CURRENT_SECURITY_CTX: SecurityContext = SecurityContext {
@@ -72,6 +75,7 @@ pub type SyscallResult = Result<usize, SyscallError>;
 pub enum SyscallError {
     InvalidNr,
     InvalidArgument,
+    OutOfMemory,
     NotImplemented,
     Denied,
     Fault,
@@ -130,6 +134,13 @@ pub const SYSCALL_GETEGID: SyscallNr = 32;
 pub const SYSCALL_LOGIN: SyscallNr = 33;
 pub const SYSCALL_SETUID: SyscallNr = 34;
 pub const SYSCALL_SETGID: SyscallNr = 35;
+pub const SYSCALL_NET_SOCKET: SyscallNr = 36;
+pub const SYSCALL_NET_BIND: SyscallNr = 37;
+pub const SYSCALL_NET_CONNECT: SyscallNr = 38;
+pub const SYSCALL_NET_SEND: SyscallNr = 39;
+pub const SYSCALL_NET_RECV: SyscallNr = 40;
+pub const SYSCALL_NET_CLOSE: SyscallNr = 41;
+pub const SYSCALL_NET_PING: SyscallNr = 42;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -504,6 +515,59 @@ fn sys_fork(_args: SyscallArgs) -> SyscallResult {
     Ok(pid as usize)
 }
 
+// ============================================================================
+// Syscalls de red para userspace
+// ============================================================================
+
+/// Tipo de socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketType {
+    Stream = 1,   // TCP (placeholder)
+    Datagram = 2, // UDP / ICMP raw
+}
+
+/// Estado de un socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketState {
+    Free = 0,
+    Allocated = 1,
+    Bound = 2,
+    Connected = 3,
+}
+
+/// Entrada de socket abierta.
+#[derive(Debug, Clone, Copy)]
+pub struct SocketEntry {
+    pub state: SocketState,
+    pub sock_type: SocketType,
+    pub local_port: u16,
+    pub remote_ip: [u8; 4],
+    pub remote_port: u16,
+}
+
+/// Tabla global de sockets (máximo 16 sockets concurrentes).
+const MAX_SOCKETS: usize = 16;
+
+static mut SOCKET_TABLE: [SocketEntry; MAX_SOCKETS] = [SocketEntry {
+    state: SocketState::Free,
+    sock_type: SocketType::Datagram,
+    local_port: 0,
+    remote_ip: [0; 4],
+    remote_port: 0,
+}; MAX_SOCKETS];
+
+static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Encuentra un socket libre en la tabla.
+fn find_free_socket() -> Result<usize, SyscallError> {
+    for i in 0..MAX_SOCKETS {
+        if unsafe { SOCKET_TABLE[i].state } == SocketState::Free {
+            return Ok(i);
+        }
+    }
+    Err(SyscallError::OutOfMemory)
+}
+
 /// Lee bloques desde el dispositivo de bloque VirtIO.
 /// arg1: sector (LBA), arg2: sector_count, arg3: ptr a buffer, arg4: tamaño del buffer en bytes.
 fn sys_block_read(args: SyscallArgs) -> SyscallResult {
@@ -562,6 +626,212 @@ fn sys_block_write(args: SyscallArgs) -> SyscallResult {
     }
 
     Ok(bytes_needed as usize)
+}
+
+/// net_socket: crea un nuevo socket de red.
+/// arg1: tipo de socket (1=Stream, 2=Datagram).
+fn sys_net_socket(args: SyscallArgs) -> SyscallResult {
+    let sock_type = match args.arg1 {
+        1 => SocketType::Stream,
+        2 => SocketType::Datagram,
+        _ => return Err(SyscallError::InvalidArgument),
+    };
+
+    let idx = find_free_socket()?;
+    let socket_id = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed) as i64;
+
+    unsafe {
+        SOCKET_TABLE[idx] = SocketEntry {
+            state: SocketState::Allocated,
+            sock_type,
+            local_port: 0,
+            remote_ip: [0; 4],
+            remote_port: 0,
+        };
+    }
+
+    Ok(socket_id as usize)
+}
+
+/// net_bind: asocia un socket a un puerto local.
+/// arg1: socket_id, arg2: puerto local.
+fn sys_net_bind(args: SyscallArgs) -> SyscallResult {
+    let socket_id = args.arg1 as usize;
+    let port = args.arg2 as u16;
+
+    let idx = socket_id.wrapping_sub(1);
+    if idx >= MAX_SOCKETS {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    unsafe {
+        let entry = &mut SOCKET_TABLE[idx];
+        if entry.state == SocketState::Free {
+            return Err(SyscallError::InvalidArgument);
+        }
+        entry.local_port = port;
+        entry.state = SocketState::Bound;
+    }
+
+    Ok(0)
+}
+
+/// net_connect: conecta un socket a una dirección remota.
+/// arg1: socket_id, arg2: ptr a IP remota (4 bytes), arg3: puerto remoto.
+fn sys_net_connect(args: SyscallArgs) -> SyscallResult {
+    let socket_id = args.arg1 as usize;
+    let ip_ptr = args.arg2 as *const u8;
+    let port = args.arg3 as u16;
+
+    if ip_ptr.is_null() {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let idx = socket_id.wrapping_sub(1);
+    if idx >= MAX_SOCKETS {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let remote_ip = unsafe { core::slice::from_raw_parts(ip_ptr, 4) };
+    let mut rip = [0u8; 4];
+    rip.copy_from_slice(remote_ip);
+
+    unsafe {
+        let entry = &mut SOCKET_TABLE[idx];
+        if entry.state == SocketState::Free {
+            return Err(SyscallError::InvalidArgument);
+        }
+        entry.remote_ip = rip;
+        entry.remote_port = port;
+        entry.state = SocketState::Connected;
+    }
+
+    Ok(0)
+}
+
+/// net_send: envía datos por un socket.
+/// arg1: socket_id, arg2: ptr a datos, arg3: longitud de datos.
+fn sys_net_send(args: SyscallArgs) -> SyscallResult {
+    let socket_id = args.arg1 as usize;
+    let data_ptr = args.arg2 as *const u8;
+    let data_len = args.arg3;
+
+    if data_ptr.is_null() || data_len == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let idx = socket_id.wrapping_sub(1);
+    if idx >= MAX_SOCKETS {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let entry = unsafe { SOCKET_TABLE[idx] };
+    if entry.state == SocketState::Free {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+
+    // Enviar como paquete ICMP echo (para simplicidad, usamos el stack de red existente)
+    let net = unsafe { global_virtio_net() };
+    if net.state() != crate::virtio_net::VirtioNetState::Ready {
+        return Err(SyscallError::DeviceNotFound);
+    }
+
+    unsafe {
+        net.send_packet(data).map_err(|_| SyscallError::IOError)?;
+    }
+
+    Ok(data_len)
+}
+
+/// net_recv: recibe datos de un socket.
+/// arg1: socket_id, arg2: ptr a buffer, arg3: tamaño del buffer.
+fn sys_net_recv(args: SyscallArgs) -> SyscallResult {
+    let socket_id = args.arg1 as usize;
+    let buf_ptr = args.arg2 as *mut u8;
+    let buf_size = args.arg3;
+
+    if buf_ptr.is_null() || buf_size == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let idx = socket_id.wrapping_sub(1);
+    if idx >= MAX_SOCKETS {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let entry = unsafe { SOCKET_TABLE[idx] };
+    if entry.state == SocketState::Free {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    // Recibir paquete de la red
+    let net = unsafe { global_virtio_net() };
+    if net.state() != crate::virtio_net::VirtioNetState::Ready {
+        return Err(SyscallError::DeviceNotFound);
+    }
+
+    // Intentar recibir un paquete (no bloqueante)
+    match unsafe { net.receive_packet() } {
+        Some(pkt) => {
+            let copy_len = pkt.len().min(buf_size);
+            unsafe {
+                core::ptr::copy_nonoverlapping(pkt.as_ptr(), buf_ptr, copy_len);
+            }
+            Ok(copy_len)
+        }
+        None => Ok(0), // No hay datos disponibles
+    }
+}
+
+/// net_close: cierra un socket.
+/// arg1: socket_id.
+fn sys_net_close(args: SyscallArgs) -> SyscallResult {
+    let socket_id = args.arg1 as usize;
+    let idx = socket_id.wrapping_sub(1);
+
+    if idx >= MAX_SOCKETS {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    unsafe {
+        SOCKET_TABLE[idx] = SocketEntry {
+            state: SocketState::Free,
+            sock_type: SocketType::Datagram,
+            local_port: 0,
+            remote_ip: [0; 4],
+            remote_port: 0,
+        };
+    }
+
+    Ok(0)
+}
+
+/// net_ping: envía un ICMP echo request a una dirección IP.
+/// arg1: ptr a IP destino (4 bytes), arg2: ptr a datos, arg3: longitud de datos.
+fn sys_net_ping(args: SyscallArgs) -> SyscallResult {
+    let ip_ptr = args.arg1 as *const u8;
+    let data_ptr = args.arg2 as *const u8;
+    let data_len = args.arg3;
+
+    if ip_ptr.is_null() {
+        return Err(SyscallError::InvalidArgument);
+    }
+
+    let ip_bytes = unsafe { core::slice::from_raw_parts(ip_ptr, 4) };
+    let mut dest_ip = [0u8; 4];
+    dest_ip.copy_from_slice(ip_bytes);
+
+    let data = if data_ptr.is_null() || data_len == 0 {
+        b"ping".as_slice()
+    } else {
+        unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
+    };
+
+    icmp_echo_request(&dest_ip, data).map_err(|_| SyscallError::IOError)?;
+
+    Ok(0)
 }
 
 /// getuid: devuelve el UID real del proceso actual.
@@ -727,6 +997,13 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_LOGIN, sys_login);
     let _ = register(SYSCALL_SETUID, sys_setuid);
     let _ = register(SYSCALL_SETGID, sys_setgid);
+    let _ = register(SYSCALL_NET_SOCKET, sys_net_socket);
+    let _ = register(SYSCALL_NET_BIND, sys_net_bind);
+    let _ = register(SYSCALL_NET_CONNECT, sys_net_connect);
+    let _ = register(SYSCALL_NET_SEND, sys_net_send);
+    let _ = register(SYSCALL_NET_RECV, sys_net_recv);
+    let _ = register(SYSCALL_NET_CLOSE, sys_net_close);
+    let _ = register(SYSCALL_NET_PING, sys_net_ping);
 
     // Configurar el MSR LSTAR para la instrucción syscall/sysret (x86_64)
     // LSTAR = dirección del entry point de syscall en modo kernel

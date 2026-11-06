@@ -261,7 +261,7 @@ fn eth_send(dst_mac: &[u8; 6], ethertype: u16, payload: &[u8]) -> Result<(), &'s
 }
 
 /// Envía un paquete IPv4.
-fn ip_send(protocol: u8, dst_ip: &[u8; 4], payload: &[u8]) -> Result<(), &'static str> {
+pub fn ip_send(protocol: u8, dst_ip: &[u8; 4], payload: &[u8]) -> Result<(), &'static str> {
     let our_ip = get_our_ip();
     let dst_mac = dst_mac_for_ip(dst_ip)?;
     let eth_hdr = make_eth_header(&dst_mac, &get_our_mac(), ETHERTYPE_IPV4);

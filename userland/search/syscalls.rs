@@ -19,6 +19,13 @@ pub mod nr {
     pub const STAT: usize = 6;
     pub const VFS_LIST: usize = 23;
     pub const VFS_READ_BY_INODE: usize = 24;
+    pub const NET_SOCKET: usize = 36;
+    pub const NET_BIND: usize = 37;
+    pub const NET_CONNECT: usize = 38;
+    pub const NET_SEND: usize = 39;
+    pub const NET_RECV: usize = 40;
+    pub const NET_CLOSE: usize = 41;
+    pub const NET_PING: usize = 42;
 }
 
 /// Errores de syscall (codificados como valor negativo en rax).
@@ -102,6 +109,91 @@ pub fn sys_vfs_list(buf: &mut [u8]) -> Result<usize, SysError> {
 #[inline(always)]
 pub fn sys_vfs_read_by_inode(inode_id: usize, offset: usize, buf: &mut [u8]) -> Result<usize, SysError> {
     let ret = syscall(nr::VFS_READ_BY_INODE, inode_id, offset, buf.as_mut_ptr() as usize, buf.len(), 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Crea un socket de red.
+/// arg1: tipo de socket (1=Stream, 2=Datagram).
+/// Devuelve el ID del socket o error.
+#[inline(always)]
+pub fn sys_net_socket(sock_type: usize) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_SOCKET, sock_type, 0, 0, 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Asocia un socket a un puerto local.
+/// arg1: socket_id, arg2: puerto local.
+#[inline(always)]
+pub fn sys_net_bind(socket_id: usize, port: u16) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_BIND, socket_id, port as usize, 0, 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Conecta un socket a una dirección remota.
+/// arg1: socket_id, arg2: ptr a IP remota (4 bytes), arg3: puerto remoto.
+#[inline(always)]
+pub fn sys_net_connect(socket_id: usize, ip_ptr: *const u8, port: u16) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_CONNECT, socket_id, ip_ptr as usize, port as usize, 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Envía datos por un socket.
+/// arg1: socket_id, arg2: ptr a datos, arg3: longitud de datos.
+#[inline(always)]
+pub fn sys_net_send(socket_id: usize, data: &[u8]) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_SEND, socket_id, data.as_ptr() as usize, data.len(), 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Recibe datos de un socket.
+/// arg1: socket_id, arg2: ptr a buffer, arg3: tamaño del buffer.
+#[inline(always)]
+pub fn sys_net_recv(socket_id: usize, buf: &mut [u8]) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_RECV, socket_id, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Cierra un socket.
+/// arg1: socket_id.
+#[inline(always)]
+pub fn sys_net_close(socket_id: usize) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_CLOSE, socket_id, 0, 0, 0, 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Envía un ICMP echo request (ping).
+/// arg1: ptr a IP destino (4 bytes), arg2: ptr a datos, arg3: longitud de datos.
+#[inline(always)]
+pub fn sys_net_ping(ip_ptr: *const u8, data: &[u8]) -> Result<usize, SysError> {
+    let ret = syscall(nr::NET_PING, ip_ptr as usize, data.as_ptr() as usize, data.len(), 0, 0, 0);
     if ret < 0 {
         Err(unsafe { core::mem::transmute(ret as isize) })
     } else {

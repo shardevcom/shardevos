@@ -192,15 +192,14 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
-## 5. Fase 16 — Persistencia, red y seguridad mejorada (v1.1.0)
+## 5. Fase 17 — Syscalls de red para userspace (v1.2.0)
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F16-01 | shardevfs persistente en disco | `kernel/fs/mod.rs`: read_data/write_data usan VirtIO-Blk (write-through), init() carga desde disco | ✅ |
-| F16-02 | Driver VirtIO-Net real | `kernel/drivers/virtio_net/mod.rs`: protocolo VirtIO 1.0 MMIO, colas RX/TX, envío/recepción de paquetes Ethernet | ✅ |
-| F16-03 | Stack TCP/IP mínimo | `kernel/drivers/net/stack.rs`: ARP request/reply, ICMP echo request/reply (ping), IPv4 básico | ✅ |
-| F16-04 | Syscalls setuid/setgid | SYSCALL_SETUID (34) y SYSCALL_SETGID (35): solo root puede cambiar euid/egid | ✅ |
-| F16-05 | Salida de consola mejorada | UI gráfica VESA en arranque, mensajes de estado en pantalla | ✅ |
+| F17-01 | Syscalls de red para userspace | SYSCALL_NET_SOCKET (36), BIND (37), CONNECT (38), SEND (39), RECV (40), CLOSE (41), PING (42) | ✅ |
+| F17-02 | Wrappers de syscall de red para userspace | `userland/search/syscalls.rs`: wrappers `no_std` para socket/bind/connect/send/recv/close/ping | ✅ |
+| F17-03 | Ejemplo de aplicación de red | `userland/ping/main.rs`: cliente ICMP echo que usa sys_net_ping | ✅ |
+| F17-04 | Programas de usuario embargados | `ping.elf` embargado en kernel y ejecutado al arrancar junto con `search.elf` | ✅ |
 
 ---
 

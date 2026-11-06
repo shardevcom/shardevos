@@ -372,6 +372,44 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 
 ---
 
+## 8. Fase 17 — Syscalls de red para userspace (v1.2.0)
+
+### 8.1 Syscalls de red
+
+| Syscall | Número | Descripción |
+|---------|--------|-------------|
+| `SYSCALL_NET_SOCKET` | 36 | Crear socket (Stream o Datagram) |
+| `SYSCALL_NET_BIND` | 37 | Asociar socket a puerto local |
+| `SYSCALL_NET_CONNECT` | 38 | Conectar socket a dirección remota |
+| `SYSCALL_NET_SEND` | 39 | Enviar datos por socket |
+| `SYSCALL_NET_RECV` | 40 | Recibir datos de socket |
+| `SYSCALL_NET_CLOSE` | 41 | Cerrar socket |
+| `SYSCALL_NET_PING` | 42 | Enviar ICMP echo request |
+
+### 8.2 Wrappers de userspace
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `sys_net_socket/bind/connect/send/recv/close/ping` | `userland/search/syscalls.rs` | Wrappers `no_std` para syscalls de red |
+
+### 8.3 Programa de usuario: ping
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `ping.elf` | `userland/ping/main.rs` | Cliente ICMP echo que envía ping a 10.0.0.1 |
+| `linker.ld` | `userland/ping/linker.ld` | Enlace para ELF en 0x200000 |
+
+### 8.4 Estado de validación
+
+- Kernel compila con 35 syscalls (incluyendo 7 de red)
+- Userspace `ping.elf` compila y está embargado en el kernel
+- `search.elf` y `ping.elf` se ejecutan secuencialmente al arrancar
+- QEMU arranca sin triple fault con todos los módulos integrados
+- Los 10 tests de `binfmt_loader` siguen pasando
+- Tests de seguridad (usuarios, grupos, permisos) siguen pasando
+
+---
+
 ## 9. Limitaciones conocidas
 
 - Salida por puerto serie COM1 no visible en entorno QEMU de prueba (configuración de terminal)

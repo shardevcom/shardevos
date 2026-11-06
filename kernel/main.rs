@@ -209,6 +209,30 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
+    // Cargar y ejecutar programa de usuario: search.elf (indexador/buscador)
+    crate::vga_print_line("  [ INFO ] Cargando programa de usuario (search)...", 18, 0x0F);
+    match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_SEARCH_ELF) {
+        Ok(()) => {
+            crate::vga_print_line("  [ OK ] Programa search ejecutado.", 19, 0x0A);
+        }
+        Err(e) => {
+            crate::vga_print_line("  [ ERR ] Error cargando search.", 19, 0x0C);
+            crate::vga_print_line(e, 20, 0x0C);
+        }
+    }
+
+    // Cargar y ejecutar programa de usuario: ping.elf (cliente ICMP)
+    crate::vga_print_line("  [ INFO ] Cargando programa de usuario (ping)...", 21, 0x0F);
+    match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_PING_ELF) {
+        Ok(()) => {
+            crate::vga_print_line("  [ OK ] Programa ping ejecutado.", 22, 0x0A);
+        }
+        Err(e) => {
+            crate::vga_print_line("  [ ERR ] Error cargando ping.", 22, 0x0C);
+            crate::vga_print_line(e, 23, 0x0C);
+        }
+    }
+
     loop {
         core::hint::spin_loop();
     }
