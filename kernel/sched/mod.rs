@@ -410,6 +410,22 @@ pub fn create_thread(&mut self, pid: ProcessId, entry_point: usize, stack: usize
         Ok(tid)
     }
 
+    pub fn create_thread_with_address_space(
+        &mut self,
+        pid: ProcessId,
+        entry_point: usize,
+        stack: usize,
+        stack_size: usize,
+        priority: TaskPriority,
+        cr3: usize,
+    ) -> Result<TaskId, SchedulerError> {
+        let tid = self.create_thread(pid, entry_point, stack, stack_size, priority)?;
+        if let Some(thread) = self.get_task_mut(tid) {
+            thread.context.cr3 = cr3 as u64;
+        }
+        Ok(tid)
+    }
+
     pub fn current_task_id(&self) -> TaskId {
         self.current_task.load(Ordering::Acquire)
     }
@@ -766,6 +782,19 @@ pub mod self_healing;
         let tid = sched.create_thread(pid, 0x1000, 0x20000, 0x1000, TaskPriority::Normal).unwrap();
         assert_eq!(tid, 1);
         assert_eq!(sched.task_count(), 1);
+    }
+
+    #[test]
+    fn scheduler_create_thread_with_address_space() {
+        let mut sched = Scheduler::new();
+        unsafe { sched.init(); }
+        let pid = sched.create_process("test", 0).unwrap();
+        let user_cr3 = 0x1234usize;
+        let tid = sched
+            .create_thread_with_address_space(pid, 0x1000, 0x20000, 0x1000, TaskPriority::Normal, user_cr3)
+            .unwrap();
+        let thread = sched.get_task(tid).unwrap();
+        assert_eq!(thread.context.cr3, user_cr3 as u64);
     }
 
     #[test]

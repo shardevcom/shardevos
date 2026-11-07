@@ -523,6 +523,13 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 | Scroll window | `kernel/ui_manager/window.rs` | `WindowManager::scroll_window` |
 | Handler | `kernel/ui_manager/mod.rs` | Desplaza ventana enfocada en `Scroll`/`GestureSwipe` |
 
+### 8.5 Espacios de dirección por hilo/proceso (F22-01)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Thread address space | `kernel/sched/mod.rs` | `Scheduler::create_thread_with_address_space` asigna `cr3` del hilo |
+
+
 ### 8.3 Estado de validación
 
 | Prueba | Comando | Resultado |
