@@ -7,6 +7,7 @@
 //! - API de registro de manejadores por número de syscall
 
 use core::arch::asm;
+use core::convert::TryInto;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // Acceso al Unified Input Manager y VFS a través del crate root
@@ -19,7 +20,9 @@ use crate::security::{
     global_user_manager, init_user_manager, SecurityContext, ROOT_UID, ROOT_GID,
     NOBODY_UID, NOBODY_GID,
 };
-use crate::net::stack::{icmp_echo_request, ip_send, is_initialized as net_is_initialized};
+use crate::net::stack::{icmp_echo_request, ip_send, get_our_ip, is_initialized as net_is_initialized};
+use crate::net::tcp::{tcp_connect, tcp_receive, tcp_send_segment, TcpConnection, TCP_FLAG_ACK, TCP_FLAG_SYN, TCP_FLAG_PSH, make_tcp_header, TcpHeader, is_initialized as tcp_is_initialized};
+use crate::net::{EtherType, IpProtocol};
 use crate::userland_loader::load_and_run_userland;
 use crate::virtio_blk::global_virtio_blk;
 use crate::virtio_net::global_virtio_net;
@@ -696,6 +699,14 @@ fn sys_net_connect(args: SyscallArgs) -> SyscallResult {
     let mut rip = [0u8; 4];
     rip.copy_from_slice(remote_ip);
 
+    let local_ip = get_our_ip();
+
+    // Encontrar un puerto local disponible
+    let local_port = NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed) as u16 + 1024;
+
+    // Realizar handshake TCP
+    tcp_connect(&local_ip, local_port, &rip, port).map_err(|_| SyscallError::IOError)?;
+
     unsafe {
         let entry = &mut SOCKET_TABLE[idx];
         if entry.state == SocketState::Free {
@@ -703,6 +714,7 @@ fn sys_net_connect(args: SyscallArgs) -> SyscallResult {
         }
         entry.remote_ip = rip;
         entry.remote_port = port;
+        entry.local_port = local_port;
         entry.state = SocketState::Connected;
     }
 
@@ -730,17 +742,16 @@ fn sys_net_send(args: SyscallArgs) -> SyscallResult {
         return Err(SyscallError::InvalidArgument);
     }
 
+    let local_ip = get_our_ip();
+    let remote_ip = entry.remote_ip;
+    let local_port = entry.local_port;
+    let remote_port = entry.remote_port;
+
     let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
 
-    // Enviar como paquete ICMP echo (para simplicidad, usamos el stack de red existente)
-    let net = unsafe { global_virtio_net() };
-    if net.state() != crate::virtio_net::VirtioNetState::Ready {
-        return Err(SyscallError::DeviceNotFound);
-    }
-
-    unsafe {
-        net.send_packet(data).map_err(|_| SyscallError::IOError)?;
-    }
+    // Enviar como segmento TCP
+    let mut tcp_header = make_tcp_header(local_port, remote_port, 0, 0, TCP_FLAG_PSH | TCP_FLAG_ACK, 8192);
+    tcp_send_segment(&local_ip, &remote_ip, &mut tcp_header, data).map_err(|_| SyscallError::IOError)?;
 
     Ok(data_len)
 }
@@ -766,6 +777,11 @@ fn sys_net_recv(args: SyscallArgs) -> SyscallResult {
         return Err(SyscallError::InvalidArgument);
     }
 
+    let local_port = entry.local_port;
+    let remote_port = entry.remote_port;
+    let remote_ip = entry.remote_ip;
+    let local_ip = get_our_ip();
+
     // Recibir paquete de la red
     let net = unsafe { global_virtio_net() };
     if net.state() != crate::virtio_net::VirtioNetState::Ready {
@@ -775,9 +791,74 @@ fn sys_net_recv(args: SyscallArgs) -> SyscallResult {
     // Intentar recibir un paquete (no bloqueante)
     match unsafe { net.receive_packet() } {
         Some(pkt) => {
-            let copy_len = pkt.len().min(buf_size);
+            // Verificar que sea un paquete Ethernet con al menos 14 bytes
+            if pkt.len() < 14 {
+                return Ok(0);
+            }
+
+            // Verificar ethertype == IPv4 (0x0800)
+            let ethertype = u16::from_be_bytes([pkt[12], pkt[13]]);
+            if ethertype != EtherType::IPv4 as u16 {
+                return Ok(0);
+            }
+
+            // Verificar que hay al menos IP header (20 bytes)
+            if pkt.len() < 14 + 20 {
+                return Ok(0);
+            }
+
+            // Verificar protocolo IP == TCP (6)
+            let ip_protocol = pkt[23];
+            if ip_protocol != IpProtocol::TCP as u8 {
+                return Ok(0);
+            }
+
+            // Extraer direcciones IP y puertos TCP
+            let src_ip: [u8; 4] = pkt[26..30].try_into().unwrap();
+            let dst_ip: [u8; 4] = pkt[30..34].try_into().unwrap();
+            let tcp_src_port = u16::from_be_bytes([pkt[34], pkt[35]]);
+            let tcp_dst_port = u16::from_be_bytes([pkt[36], pkt[37]]);
+
+            // Verificar que el paquete esté dirigido a nuestro socket
+            if tcp_dst_port != local_port || tcp_src_port != remote_port {
+                return Ok(0);
+            }
+
+            // Verificar que el destino sea nuestra IP
+            if dst_ip != local_ip {
+                return Ok(0);
+            }
+
+            // Extraer el payload TCP (después de IP header + TCP header)
+            let tcp_header_offset = 14 + 20; // Ethernet + IP
+            let data_offset = ((pkt[tcp_header_offset + 12] >> 4) as usize) * 4; // Data offset en palabras de 32 bits
+            let tcp_header_total = tcp_header_offset + data_offset;
+            let payload_start = tcp_header_total;
+
+            if pkt.len() < payload_start {
+                return Ok(0);
+            }
+
+            let payload = &pkt[payload_start..];
+
+            // Procesar el paquete TCP para actualizar el estado de la conexión
+            let header = TcpHeader {
+                src_port: u16::from_be_bytes([pkt[34], pkt[35]]),
+                dst_port: u16::from_be_bytes([pkt[36], pkt[37]]),
+                seq_num: u32::from_be_bytes([pkt[38], pkt[39], pkt[40], pkt[41]]),
+                ack_num: u32::from_be_bytes([pkt[42], pkt[43], pkt[44], pkt[45]]),
+                data_offset_reserved: pkt[46],
+                flags: pkt[47],
+                window_size: u16::from_be_bytes([pkt[48], pkt[49]]),
+                checksum: u16::from_be_bytes([pkt[50], pkt[51]]),
+                urgent_ptr: u16::from_be_bytes([pkt[52], pkt[53]]),
+            };
+            tcp_receive(&dst_ip, &src_ip, &header, payload);
+
+            // Copiar el payload al buffer del usuario
+            let copy_len = payload.len().min(buf_size);
             unsafe {
-                core::ptr::copy_nonoverlapping(pkt.as_ptr(), buf_ptr, copy_len);
+                core::ptr::copy_nonoverlapping(payload.as_ptr(), buf_ptr, copy_len);
             }
             Ok(copy_len)
         }

@@ -1,7 +1,7 @@
-# shardevos — Release v1.2.0
+# shardevos — Release v1.3.0
 
 > **shardevos** — Sistema Operativo Inteligente de Kernel Unificado  
-> Versión: 1.2.0 (Release estable con syscalls de red para userspace)  
+> Versión: 1.3.0 (Release estable con stack TCP completo para userspace)  
 > Fecha: Noviembre 2026  
 > Arquitectura: Kernel monolítico modular en Rust (`no_std`) + Assembly x86_64  
 > Repositorio: git@github.com:shardevcom/shardevos.git  
@@ -28,8 +28,7 @@ Esta release **v1.1.0** añade persistencia de archivos en disco real, conectivi
 | **Sistema de archivos** | VFS + shardevfs | Path resolution real (`/foo/bar.txt`), open/read/write/close/stat, archivos en RAM y disco |
 | **Dispositivo de bloque** | VirtIO-Blk real | Protocolo VirtIO 1.0 sobre MMIO, lectura/escritura de bloques reales en disco QEMU |
 | **Syscalls de bloque** | `sys_block_read/write` | Números 27 y 28 para acceso directo a disco desde userspace |
-| **Red** | VirtIO-Net real | Protocolo VirtIO 1.0 sobre MMIO, colas RX/TX, envío/recepción de paquetes Ethernet |
-| **Stack TCP/IP** | ARP + ICMP | Resolución de direcciones MAC (ARP), echo request/reply (ping), encabezado IPv4 |
+| **Red** | VirtIO-Net real + Stack TCP | Protocolo VirtIO 1.0 sobre MMIO, colas RX/TX, handshake TCP SYN/SYN-ACK/ACK, envío/recepción de segmentos TCP |
 | **Syscalls de red** | `socket/bind/connect/send/recv/close/ping` | Números 36-42 para acceso a red desde userspace |
 | **Interfaz gráfica** | UI Responsiva VESA | Modo gráfico 800x600@32 RGBA, framebuffer LFB, primitivas de dibujo, texto 8x8, barra de título |
 | **Búsqueda IA** | Indexador semántico | Indexa archivos por contenido, búsqueda top-5 por similitud de coseno, embeddings placeholder |
@@ -288,9 +287,9 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 | 35 | `sys_setgid` | Establecer GID efectivo (solo root) |
 | 36 | `sys_net_socket` | Crear socket (Stream/Datagram) |
 | 37 | `sys_net_bind` | Asociar socket a puerto local |
-| 38 | `sys_net_connect` | Conectar socket a dirección remota |
-| 39 | `sys_net_send` | Enviar datos por socket |
-| 40 | `sys_net_recv` | Recibir datos de socket |
+| 38 | `sys_net_connect` | Conectar socket a dirección remota (handshake TCP) |
+| 39 | `sys_net_send` | Enviar datos por socket (segmento TCP) |
+| 40 | `sys_net_recv` | Recibir datos de socket (segmento TCP) |
 | 41 | `sys_net_close` | Cerrar socket |
 | 42 | `sys_net_ping` | Enviar ICMP echo request |
 

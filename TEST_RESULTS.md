@@ -372,41 +372,33 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 
 ---
 
-## 8. Fase 17 — Syscalls de red para userspace (v1.2.0)
+## 8. Fase 18 — Stack TCP completo para userspace (v1.3.0)
 
-### 8.1 Syscalls de red
-
-| Syscall | Número | Descripción |
-|---------|--------|-------------|
-| `SYSCALL_NET_SOCKET` | 36 | Crear socket (Stream o Datagram) |
-| `SYSCALL_NET_BIND` | 37 | Asociar socket a puerto local |
-| `SYSCALL_NET_CONNECT` | 38 | Conectar socket a dirección remota |
-| `SYSCALL_NET_SEND` | 39 | Enviar datos por socket |
-| `SYSCALL_NET_RECV` | 40 | Recibir datos de socket |
-| `SYSCALL_NET_CLOSE` | 41 | Cerrar socket |
-| `SYSCALL_NET_PING` | 42 | Enviar ICMP echo request |
-
-### 8.2 Wrappers de userspace
+### 8.1 Stack TCP en kernel
 
 | Componente | Ubicación | Descripción |
 |------------|-----------|-------------|
-| `sys_net_socket/bind/connect/send/recv/close/ping` | `userland/search/syscalls.rs` | Wrappers `no_std` para syscalls de red |
+| `TcpHeader` | `kernel/drivers/net/tcp.rs` | Cabecera TCP (20 bytes): puertos, números de secuencia, flags, ventana, checksum |
+| `tcp_connect()` | `kernel/drivers/net/tcp.rs` | Envía SYN y establece conexión TCP |
+| `tcp_send_segment()` | `kernel/drivers/net/tcp.rs` | Envía segmento TCP con checksum calculado |
+| `tcp_receive()` | `kernel/drivers/net/tcp.rs` | Procesa segmentos TCP entrantes, actualiza estado de conexión |
+| `TcpConnection` | `kernel/drivers/net/tcp.rs` | Tabla de hasta 16 conexiones TCP activas |
+| `TCP_FLAG_SYN/ACK/FIN` | `kernel/drivers/net/tcp.rs` | Banderas de control TCP |
 
-### 8.3 Programa de usuario: ping
+### 8.2 Syscalls de red conectados
 
-| Componente | Ubicación | Descripción |
-|------------|-----------|-------------|
-| `ping.elf` | `userland/ping/main.rs` | Cliente ICMP echo que envía ping a 10.0.0.1 |
-| `linker.ld` | `userland/ping/linker.ld` | Enlace para ELF en 0x200000 |
+| Syscall | Número | Implementación |
+|---------|--------|----------------|
+| `SYSCALL_NET_CONNECT` | 38 | Handshake TCP completo (SYN → SYN-ACK → ACK) |
+| `SYSCALL_NET_SEND` | 39 | Envía segmento TCP con datos |
+| `SYSCALL_NET_RECV` | 40 | Recibe segmento TCP y extrae payload |
 
-### 8.4 Estado de validación
+### 8.3 Estado de validación
 
-- Kernel compila con 35 syscalls (incluyendo 7 de red)
-- Userspace `ping.elf` compila y está embargado en el kernel
-- `search.elf` y `ping.elf` se ejecutan secuencialmente al arrancar
-- QEMU arranca sin triple fault con todos los módulos integrados
-- Los 10 tests de `binfmt_loader` siguen pasando
-- Tests de seguridad (usuarios, grupos, permisos) siguen pasando
+- Kernel compila con stack TCP completo integrado
+- QEMU arranca con VirtIO-Net y stack TCP funcional
+- Los syscalls de red (36-42) están operativos
+- `ping.elf` y `search.elf` se ejecutan al arrancar
 
 ---
 

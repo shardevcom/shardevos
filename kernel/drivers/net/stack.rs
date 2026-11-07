@@ -96,7 +96,7 @@ const ICMP_ECHO_REPLY: u8 = 0;
 // ============================================================================
 
 /// Calcula el checksum de Internet (16-bit ones' complement sum).
-fn checksum(data: &[u8]) -> u16 {
+pub fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     let mut i = 0;
     while i + 1 < data.len() {
@@ -119,7 +119,7 @@ fn get_our_mac() -> [u8; 6] {
 }
 
 /// Obtiene la dirección IP del sistema.
-fn get_our_ip() -> [u8; 4] {
+pub fn get_our_ip() -> [u8; 4] {
     unsafe { IP_ADDR }
 }
 

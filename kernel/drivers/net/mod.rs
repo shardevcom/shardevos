@@ -34,6 +34,7 @@ pub type NetResult<T> = Result<T, NetError>;
 pub type NetDeviceId = u64;
 
 pub mod stack;
+pub mod tcp;
 #[allow(dead_code)]
 const MTU: usize = 1500;
 

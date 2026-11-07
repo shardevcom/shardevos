@@ -192,14 +192,13 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 
 ---
 
-## 5. Fase 17 — Syscalls de red para userspace (v1.2.0)
+## 5. Fase 18 — Stack TCP completo para userspace (v1.3.0)
 
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
-| F17-01 | Syscalls de red para userspace | SYSCALL_NET_SOCKET (36), BIND (37), CONNECT (38), SEND (39), RECV (40), CLOSE (41), PING (42) | ✅ |
-| F17-02 | Wrappers de syscall de red para userspace | `userland/search/syscalls.rs`: wrappers `no_std` para socket/bind/connect/send/recv/close/ping | ✅ |
-| F17-03 | Ejemplo de aplicación de red | `userland/ping/main.rs`: cliente ICMP echo que usa sys_net_ping | ✅ |
-| F17-04 | Programas de usuario embargados | `ping.elf` embargado en kernel y ejecutado al arrancar junto con `search.elf` | ✅ |
+| F18-01 | Stack TCP en kernel | `kernel/drivers/net/tcp.rs`: cabecera TCP, handshake SYN/SYN-ACK/ACK, envío/recepción de segmentos, tabla de conexiones | ✅ |
+| F18-02 | Syscalls de red conectados | `NET_CONNECT` (38), `NET_SEND` (39), `NET_RECV` (40) ahora usan el stack TCP real sobre VirtIO-Net | ✅ |
+| F18-03 | Prueba de conectividad | QEMU con VirtIO-Net: kernel responde a ICMP echo y acepta conexiones TCP | ✅ |
 
 ---
 
