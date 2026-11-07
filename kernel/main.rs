@@ -239,6 +239,35 @@ pub extern "C" fn kernel_main() -> ! {
                 display.fill_rect(0, 560, 800, 40, Color::rgb(30, 60, 120));
                 display.draw_string(20, 570, "shardevOS - Sistema Operativo Inteligente v0.1.0", Color::WHITE, Color::rgb(30, 60, 120));
                 display.draw_string(400, 570, "UI Grafica: Modo VESA 800x600@32", Color::LIGHT_GRAY, Color::rgb(30, 60, 120));
+
+                // Fase 21-01: Integrar compositor de ventanas en el renderizado grafico
+                unsafe {
+                    let wm = crate::ui_manager::global_window_manager();
+                    let comp = crate::ui_manager::global_compositor();
+                    wm.init();
+                    comp.init();
+
+                    let mut props = crate::ui_manager::WindowProperties::default();
+                    let mut title = [0u8; 64];
+                    title[..b"Busqueda semantica".len()].copy_from_slice(b"Busqueda semantica");
+                    props.title = title;
+                    props.width = 800;
+                    props.height = 600;
+                    props.visible = true;
+                    let win_id = wm.create_window(props).unwrap();
+                    wm.show_window(win_id).unwrap();
+
+                    let fb = crate::ui_manager::Framebuffer {
+                        addr: display.fb_info.addr,
+                        width: display.fb_info.width,
+                        height: display.fb_info.height,
+                        pitch: display.fb_info.pitch,
+                        format: crate::ui_manager::PixelFormat::RGBA8888,
+                        size: (display.fb_info.pitch * display.fb_info.height) as usize,
+                    };
+                    wm.set_framebuffer(win_id, fb).unwrap();
+                    let _ = comp.composite_frame(&wm, &fb);
+                }
             }
             Err(e) => {
                 // Fallback a modo texto si VBE no disponible
