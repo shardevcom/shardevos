@@ -541,6 +541,12 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 |------------|-----------|-------------|
 | User exec address space | `kernel/userland_loader.rs` | Crea PML4 de usuario, mapea stack/segmentos y usa `run_user_program` |
 
+### 8.8 Contexto de seguridad en modo usuario (F22-04)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| User security context | `kernel/userland_loader.rs` | Resetea contexto de seguridad a no autenticado antes de `run_user_program` |
+
 
 ### 8.3 Estado de validación
 

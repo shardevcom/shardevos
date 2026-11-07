@@ -132,5 +132,8 @@ pub fn load_and_run_userland(bytes: &[u8]) -> Result<(), &'static str> {
         }
     }
 
-    unsafe { crate::sched::run_user_program(entry_point, USER_STACK_VADDR + USER_STACK_SIZE, user_pml4) }
+    unsafe {
+        crate::syscall::set_current_security_ctx(crate::security::SecurityContext::new_unauthenticated());
+        crate::sched::run_user_program(entry_point, USER_STACK_VADDR + USER_STACK_SIZE, user_pml4);
+    }
 }
