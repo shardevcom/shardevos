@@ -19,6 +19,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F7 | VFS, sistemas de archivos y drivers de dispositivo | ✅ Completada | 100% |
 | F8 | Pruebas, simulación QEMU, documentación y release | ✅ Completada | 100% |
 | F19 | Embeddings cuantizados INT8 y búsqueda semántica (v1.4.0) | ✅ Completada | 100% |
+| F20 | Modelo serializado .semb e integración VFS (v1.5.0) | ✅ Completada | 100% |
 
 ---
 
@@ -211,6 +212,17 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F19-02 | Conector de embeddings para búsqueda semántica | `EmbeddingIndex` + `SearchHit` en kernel y userspace: indexación por inodo, búsqueda top-k por coseno y API `index_document`/`semantic_search` sin allocador | ✅ |
 | F19-03 | Integrar embeddings reales en el buscador de archivos | `userland/search/main.rs`: indexa cada archivo con `embed_text`, consulta con `semantic_search` y muestra inodo + similitud (sin placeholder de hash) | ✅ |
 | F19-04 | Actualizar BACKLOG, TEST_RESULTS y RELEASE para v1.4.0 | Documentación de la fase, resultados de pruebas (16 tests de embeddings) y notas de release v1.4.0 | ✅ |
+
+---
+
+## 5. Fase 20 — Modelo serializado .semb e integración VFS (v1.5.0)
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F20-01 | Formato serializado de embeddings (.semb) | `EmbeddingModel::export_semb` / `load_from_semb`, header `SEMB_MAGIC` / `SEMB_VERSION`, entradas de palabra + vector INT8 | ✅ |
+| F20-02 | Lectura real de VFS y lookup por ruta | `SYSCALL_VFS_READ_BY_INODE` lee datos reales de shardevfs; nuevo `SYSCALL_VFS_LOOKUP` (43) resuelve ruta a inodo | ✅ |
+| F20-03 | Integración del modelo en userspace | `userland/search/main.rs` carga `/minilm_int8.semb`, con fallback a modelo integrado | ✅ |
+| F20-04 | Exportar modelo integrado y pruebas | `kernel/main.rs` exporta modelo a `/minilm_int8.semb`; tests de roundtrip y errores | ✅ |
 
 ---
 

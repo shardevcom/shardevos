@@ -446,11 +446,49 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 
 | Prueba | Comando | Resultado |
 |--------|---------|-----------|
-| Tests de embeddings (kernel) | `rustc --edition 2021 --test kernel/ai_engine/embeddings.rs` | ✅ 8/8 |
-| Tests de embeddings (userspace) | `rustc --edition 2021 --test userland/search/embeddings.rs` | ✅ 8/8 |
+| Tests de embeddings (kernel) | `rustc --edition 2021 --test kernel/ai_engine/embeddings.rs` | ✅ 10/10 |
+| Tests de embeddings (userspace) | `rustc --edition 2021 --test userland/search/embeddings.rs` | ✅ 11/11 |
 | Compilación del kernel | `./build/build.sh build` | ✅ OK |
 | Compilación de `search.elf` | `rustc --target x86_64-unknown-none ... userland/search/main.rs` | ✅ OK |
 | Arranque en QEMU | `./build/build.sh run` | ✅ GRUB carga el kernel, sin triple fault (salida serie no visible) |
+
+---
+
+## 8. Fase 20 — Modelo serializado `.semb` e integración VFS (v1.5.0)
+
+### 8.1 Formato serializado de embeddings
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `SEMB_MAGIC` / `SEMB_VERSION` | `kernel/ai_engine/embeddings.rs`, `userland/search/embeddings.rs` | Constantes de header y longitud fija (`SEMB_HEADER_LEN`) |
+| `VocabWord` | ambos módulos | Palabra con longitud (`u8`) + bytes planos (máx. 32) para tokens cargados |
+| `export_semb()` | ambos módulos | Serializa tokenizer + matriz INT8 a buffer |
+| `load_from_semb()` | ambos módulos | Valida magic/version/dimension/vocab y carga entradas |
+
+### 8.2 Lectura real de VFS y lookup
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `SYSCALL_VFS_READ_BY_INODE` | `kernel/syscall/mod.rs` | Ahora delega en `shardevfs.read_data` (lectura real) |
+| `SYSCALL_VFS_LOOKUP` | `kernel/syscall/mod.rs`, `userland/search/syscalls.rs` | Resuelve ruta (ej. `/minilm_int8.semb`) a inodo |
+
+### 8.3 Integración del modelo en userspace
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `load_external_model()` | `userland/search/main.rs` | Carga el modelo desde VFS por chunks y llama `load_embedding_model_from_bytes` |
+| Fallback | `userland/search/main.rs` | Si falla, usa `init_embedding_model()` con modelo integrado |
+| Exportación | `kernel/main.rs` | `kernel_main` exporta el modelo integrado a `/minilm_int8.semb` en shardevfs |
+
+### 8.4 Estado de validación
+
+| Prueba | Comando | Resultado |
+|--------|---------|-----------|
+| Tests de embeddings (kernel) | `rustc --edition 2021 --test kernel/ai_engine/embeddings.rs` | ✅ 10/10 |
+| Tests de embeddings (userspace) | `rustc --edition 2021 --test userland/search/embeddings.rs` | ✅ 11/11 |
+| Roundtrip `.semb` | `test_semb_roundtrip` | ✅ |
+| Compilación del kernel | `./build/build.sh build` | ✅ OK |
+| Compilación de `search.elf` | `rustc --target x86_64-unknown-none ... userland/search/main.rs` | ✅ OK |
 
 ---
 

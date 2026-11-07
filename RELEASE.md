@@ -344,8 +344,8 @@ O usar imagen de disquete:
 
 | Versión | Características | Fase |
 |---------|---------------|------|
-| v1.4.0 | Embeddings cuantizados INT8 y búsqueda semántica real (release actual) | F19 |
-| v1.5.0 | Carga de all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp en userspace | F20 |
+| v1.4.0 | Embeddings cuantizados INT8 y búsqueda semántica real | F19 |
+| v1.5.0 | Modelo serializado `.semb` e integración VFS (carga de modelo externo en userspace) | F20 |
 | v1.6.0 | UI con ventanas, compositor, ratón y gestos táctiles | F21-F22 |
 | v2.0.0 | Multiusuario completo con aislamiento de memoria y sandbox de procesos | F23-F25 |
 
@@ -361,4 +361,4 @@ O usar imagen de disquete:
 
 ---
 
-*Última actualización: Noviembre 2026 — Release v1.4.0*
+*Última actualización: Noviembre 2026 — Release v1.5.0*

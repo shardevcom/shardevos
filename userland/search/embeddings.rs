@@ -121,8 +121,43 @@ impl Default for Embedding {
 }
 
 /// Tokenizador simple: divide texto en tokens (palabras) y mapea a IDs.
+const MAX_WORD_LEN: usize = 32;
+
+/// Palabra del vocabulario almacenada como bytes planos (permite tokens cargados desde el modelo).
+#[derive(Debug, Clone, Copy)]
+pub struct VocabWord {
+    len: u8,
+    bytes: [u8; MAX_WORD_LEN],
+}
+
+impl VocabWord {
+    /// Crea una palabra vacía.
+    pub const fn empty() -> Self {
+        Self {
+            len: 0,
+            bytes: [0; MAX_WORD_LEN],
+        }
+    }
+
+    /// Crea una palabra desde un slice de bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > MAX_WORD_LEN {
+            return None;
+        }
+        let mut word = Self::empty();
+        word.len = bytes.len() as u8;
+        word.bytes[..bytes.len()].copy_from_slice(bytes);
+        Some(word)
+    }
+
+    /// Devuelve los bytes de la palabra.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+}
+
 pub struct Tokenizer {
-    vocab: [Option<&'static str>; VOCAB_SIZE],
+    vocab: [VocabWord; VOCAB_SIZE],
     vocab_size: usize,
 }
 
@@ -130,26 +165,42 @@ impl Tokenizer {
     /// Crea un tokenizer vacío.
     pub const fn new() -> Self {
         Self {
-            vocab: [None; VOCAB_SIZE],
+            vocab: [VocabWord::empty(); VOCAB_SIZE],
             vocab_size: 0,
         }
     }
 
+    /// Vacía el vocabulario.
+    pub fn clear(&mut self) {
+        for i in 0..VOCAB_SIZE {
+            self.vocab[i] = VocabWord::empty();
+        }
+        self.vocab_size = 0;
+    }
+
+    /// Número de palabras cargadas.
+    pub fn len(&self) -> usize {
+        self.vocab_size
+    }
+
     /// Agrega una palabra al vocabulario y retorna su ID.
-    pub fn add_word(&mut self, word: &'static str) -> usize {
-        // Buscar si ya existe.
+    /// Retorna `VOCAB_SIZE` cuando el vocabulario está lleno o la palabra es demasiado larga.
+    pub fn add_word(&mut self, word: &str) -> usize {
+        let bytes = word.as_bytes();
         for i in 0..self.vocab_size {
-            if self.vocab[i] == Some(word) {
+            if self.vocab[i].as_bytes() == bytes {
                 return i;
             }
         }
         if self.vocab_size < VOCAB_SIZE {
-            self.vocab[self.vocab_size] = Some(word);
-            self.vocab_size += 1;
-            self.vocab_size - 1
-        } else {
-            0 // Vocabulario lleno, devolver ID 0.
+            if let Some(w) = VocabWord::from_bytes(bytes) {
+                let id = self.vocab_size;
+                self.vocab[id] = w;
+                self.vocab_size += 1;
+                return id;
+            }
         }
+        VOCAB_SIZE
     }
 
     /// Tokeniza un texto y devuelve los IDs de los tokens.
@@ -162,9 +213,9 @@ impl Tokenizer {
             if count >= MAX_TOKENS {
                 break;
             }
-            // Buscar la palabra en el vocabulario.
+            let bytes = word.as_bytes();
             for i in 0..self.vocab_size {
-                if self.vocab[i] == Some(word) {
+                if self.vocab[i].as_bytes() == bytes {
                     tokens[count] = i;
                     break;
                 }
@@ -174,6 +225,60 @@ impl Tokenizer {
 
         tokens
     }
+}
+
+/// Errores del formato serializado de embeddings (.semb).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelError {
+    InvalidMagic = 0,
+    UnsupportedVersion = 1,
+    InvalidDimension = 2,
+    InvalidVocabSize = 3,
+    TruncatedData = 4,
+    InvalidUtf8 = 5,
+    VocabularyTooLarge = 6,
+}
+
+const SEMB_MAGIC: u32 = 0x424D_4553;
+const SEMB_VERSION: u16 = 1;
+const SEMB_HEADER_LEN: usize = 12;
+
+/// Lee un entero de 16 bits little endian.
+fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
+    if data.len() < offset + 2 {
+        return None;
+    }
+    Some(u16::from_le_bytes([data[offset], data[offset + 1]]))
+}
+
+/// Lee un entero de 32 bits little endian.
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    if data.len() < offset + 4 {
+        return None;
+    }
+    Some(u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]))
+}
+
+/// Escribe un entero de 16 bits little endian.
+fn write_u16(out: &mut [u8], offset: usize, value: u16) {
+    out[offset] = (value & 0xff) as u8;
+    out[offset + 1] = ((value >> 8) & 0xff) as u8;
+}
+
+/// Escribe un entero de 32 bits little endian.
+fn write_u32(out: &mut [u8], offset: usize, value: u32) {
+    out[offset] = (value & 0xff) as u8;
+    out[offset + 1] = ((value >> 8) & 0xff) as u8;
+    out[offset + 2] = ((value >> 16) & 0xff) as u8;
+    out[offset + 3] = ((value >> 24) & 0xff) as u8;
+}
+
+/// Devuelve los bytes de una palabra, si existe.
+fn semb_word_bytes(word: &VocabWord) -> Option<&[u8]> {
+    if word.len == 0 {
+        return None;
+    }
+    Some(&word.bytes[..word.len as usize])
 }
 
 /// Motor de embeddings: combina tokenizador y modelo de vectores.
@@ -257,6 +362,118 @@ impl EmbeddingModel {
         }
 
         self.initialized = true;
+    }
+
+    /// Reinicia el modelo para cargar un archivo serializado.
+    fn begin_load(&mut self) {
+        self.tokenizer.clear();
+        for i in 0..VOCAB_SIZE {
+            self.embedding_matrix[i] = [0; EMBEDDING_DIM];
+        }
+        self.initialized = false;
+    }
+
+    /// Finaliza una carga serializada.
+    fn finish_load(&mut self) {
+        self.initialized = true;
+    }
+
+    /// Exporta el modelo actual al formato serializado (.semb).
+    pub fn export_semb(&self, out: &mut [u8]) -> Option<usize> {
+        if !self.initialized {
+            return None;
+        }
+
+        let mut needed = SEMB_HEADER_LEN;
+        for i in 0..self.tokenizer.len() {
+            if let Some(w) = semb_word_bytes(&self.tokenizer.vocab[i]) {
+                needed += 1 + w.len() + EMBEDDING_DIM;
+            }
+        }
+
+        if out.len() < needed {
+            return None;
+        }
+
+        let mut offset = 0;
+        write_u32(out, offset, SEMB_MAGIC);
+        offset += 4;
+        write_u16(out, offset, SEMB_VERSION);
+        offset += 2;
+        write_u16(out, offset, EMBEDDING_DIM as u16);
+        offset += 2;
+        write_u32(out, offset, self.tokenizer.len() as u32);
+        offset += 4;
+
+        for i in 0..self.tokenizer.len() {
+            if let Some(w) = semb_word_bytes(&self.tokenizer.vocab[i]) {
+                if offset + 1 + w.len() + EMBEDDING_DIM > out.len() {
+                    return None;
+                }
+                out[offset] = w.len() as u8;
+                offset += 1;
+                out[offset..offset + w.len()].copy_from_slice(w);
+                offset += w.len();
+                for j in 0..EMBEDDING_DIM {
+                    out[offset + j] = self.embedding_matrix[i][j] as u8;
+                    offset += 1;
+                }
+            }
+        }
+
+        Some(offset)
+    }
+
+    /// Carga un modelo serializado (.semb) y reemplaza el estado actual.
+    pub fn load_from_semb(&mut self, data: &[u8]) -> Result<(), ModelError> {
+        if data.len() < SEMB_HEADER_LEN {
+            return Err(ModelError::TruncatedData);
+        }
+        let magic = read_u32(data, 0).ok_or(ModelError::InvalidMagic)?;
+        if magic != SEMB_MAGIC {
+            return Err(ModelError::InvalidMagic);
+        }
+        let version = read_u16(data, 4).ok_or(ModelError::InvalidMagic)?;
+        if version != SEMB_VERSION {
+            return Err(ModelError::UnsupportedVersion);
+        }
+        let dim = read_u16(data, 6).ok_or(ModelError::InvalidMagic)? as usize;
+        if dim != EMBEDDING_DIM {
+            return Err(ModelError::InvalidDimension);
+        }
+        let vocab_size = read_u32(data, 8).ok_or(ModelError::InvalidMagic)? as usize;
+        if vocab_size > VOCAB_SIZE {
+            return Err(ModelError::InvalidVocabSize);
+        }
+
+        self.begin_load();
+
+        let mut offset = SEMB_HEADER_LEN;
+        for _ in 0..vocab_size {
+            if data.len() < offset + 1 {
+                return Err(ModelError::TruncatedData);
+            }
+            let word_len = data[offset] as usize;
+            offset += 1;
+            if offset + word_len > data.len() || offset + word_len + EMBEDDING_DIM > data.len() {
+                return Err(ModelError::TruncatedData);
+            }
+            let word = core::str::from_utf8(&data[offset..offset + word_len])
+                .map_err(|_| ModelError::InvalidUtf8)?;
+            let id = self.tokenizer.add_word(word);
+            let row_offset = offset + word_len;
+            let mut vector = [0i8; EMBEDDING_DIM];
+            for j in 0..EMBEDDING_DIM {
+                vector[j] = data[row_offset + j] as i8;
+            }
+            if id < VOCAB_SIZE {
+                self.embedding_matrix[id] = vector;
+            }
+            offset = row_offset + EMBEDDING_DIM;
+        }
+
+        self.finish_load();
+        Ok(())
     }
 
     /// Genera un embedding para un texto dado.
@@ -442,6 +659,11 @@ pub unsafe fn init_embedding_model() {
     EMBEDDING_MODEL.init();
 }
 
+/// Carga un modelo serializado (.semb) en el modelo global.
+pub unsafe fn load_embedding_model_from_bytes(data: &[u8]) -> Result<(), ModelError> {
+    EMBEDDING_MODEL.load_from_semb(data)
+}
+
 /// Instancia global del índice semántico.
 static mut EMBEDDING_INDEX: EmbeddingIndex = EmbeddingIndex::new();
 
@@ -607,5 +829,46 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(hits[0].inode_id, 10);
         assert!(hits[0].similarity >= hits[1].similarity);
+    }
+
+    #[test]
+    fn test_semb_header() {
+        let mut buf = [0u8; 12];
+        write_u32(&mut buf, 0, SEMB_MAGIC);
+        write_u16(&mut buf, 4, SEMB_VERSION);
+        write_u16(&mut buf, 6, EMBEDDING_DIM as u16);
+        write_u32(&mut buf, 8, 1);
+        assert_eq!(read_u32(&buf, 0), Some(SEMB_MAGIC));
+        assert_eq!(read_u16(&buf, 4), Some(SEMB_VERSION));
+        assert_eq!(read_u16(&buf, 6), Some(EMBEDDING_DIM as u16));
+        assert_eq!(read_u32(&buf, 8), Some(1));
+    }
+
+    #[test]
+    fn test_semb_roundtrip() {
+        let mut model = EmbeddingModel::new();
+        model.init();
+
+        let mut buf = [0u8; 65536];
+        let len = model.export_semb(&mut buf).expect("export_semb");
+        assert_eq!(read_u32(&buf, 0), Some(SEMB_MAGIC));
+        assert_eq!(read_u16(&buf, 4), Some(SEMB_VERSION));
+        assert_eq!(read_u16(&buf, 6), Some(EMBEDDING_DIM as u16));
+        assert_eq!(read_u32(&buf, 8), Some(model.tokenizer.len() as u32));
+        let mut loaded = EmbeddingModel::new();
+        loaded.load_from_semb(&buf[..len]).expect("load_semb");
+
+        let sim_same = loaded.text_similarity("archivo documento", "documento archivo");
+        let sim_diff = loaded.text_similarity("archivo documento", "red tcp");
+        assert!(sim_same > sim_diff);
+    }
+
+    #[test]
+    fn test_semb_invalid_data() {
+        let mut model = EmbeddingModel::new();
+        model.init();
+
+        let mut buf = [0u8; 16];
+        assert!(model.load_from_semb(&buf).is_err());
     }
 }

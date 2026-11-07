@@ -165,6 +165,18 @@ pub extern "C" fn kernel_main() -> ! {
         crate::vga_print_line("  [ OK ] Motor de embeddings IA inicializado.", 26, 0x0A);
     }
 
+    // Exportar el modelo de embeddings a un archivo .semb e inicializarlo en VFS
+    unsafe {
+        let embeddings_model = crate::ai_engine::embeddings::global_embedding_model();
+        let mut semb_buf = [0u8; 65536];
+        let semb_len = embeddings_model.export_semb(&mut semb_buf).unwrap_or(0);
+        let fs = crate::fs::global_shardevfs_mut();
+        let model_inode = fs.create_inode(1, "minilm_int8.semb", crate::fs::VfsNodeType::RegularFile);
+        if let Ok(model_inode) = model_inode {
+            let _ = fs.write_data(model_inode, 0, &semb_buf[..semb_len]);
+        }
+    }
+
     // Inicializar modo gráfico VESA para la UI
     unsafe {
         let display = global_gfx_display();

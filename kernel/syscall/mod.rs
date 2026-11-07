@@ -144,6 +144,7 @@ pub const SYSCALL_NET_SEND: SyscallNr = 39;
 pub const SYSCALL_NET_RECV: SyscallNr = 40;
 pub const SYSCALL_NET_CLOSE: SyscallNr = 41;
 pub const SYSCALL_NET_PING: SyscallNr = 42;
+pub const SYSCALL_VFS_LOOKUP: SyscallNr = 43;
 
 // ============================================================================
 // Traducción de syscalls de formatos heterogéneos
@@ -443,11 +444,34 @@ fn sys_vfs_read_by_inode(args: SyscallArgs) -> SyscallResult {
     let start = offset as usize;
     let end = (start + count).min(stat.size as usize);
     let read_len = if start >= stat.size as usize { 0 } else { end - start };
-    // Placeholder: rellenar con ceros (lectura real requiere device de bloque)
-    for b in unsafe { core::slice::from_raw_parts_mut(buf, read_len) }.iter_mut() {
-        *b = 0;
+    if read_len == 0 {
+        return Ok(0);
     }
-    Ok(read_len)
+
+    // Lectura real desde shardevfs (datos en RAM + write-through a disco)
+    let shardevfs = global_shardevfs_mut();
+    let dst = unsafe { core::slice::from_raw_parts_mut(buf, read_len) };
+    match shardevfs.read_data(inode_id as u64, offset as u64, dst) {
+        Ok(n) => Ok(n),
+        Err(_) => Err(SyscallError::InvalidArgument),
+    }
+}
+
+/// Resuelve una ruta del VFS a un inodo.
+/// arg1: ptr al path; arg2: longitud del path.
+fn sys_vfs_lookup(args: SyscallArgs) -> SyscallResult {
+    let path_ptr = args.arg1 as *const u8;
+    let path_len = args.arg2;
+    if path_ptr.is_null() || path_len == 0 || path_len > 256 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let path = core::str::from_utf8(path_bytes).map_err(|_| SyscallError::InvalidArgument)?;
+    let vfs = global_vfs();
+    match vfs.lookup(path) {
+        Ok(inode_id) => Ok(inode_id as usize),
+        Err(_) => Err(SyscallError::InvalidArgument),
+    }
 }
 
 /// Ejecuta un binario ELF desde el VFS.
@@ -1067,6 +1091,7 @@ pub unsafe fn init() {
     let _ = register(SYSCALL_INPUT_POLL, sys_input_poll);
     let _ = register(SYSCALL_VFS_LIST, sys_vfs_list);
     let _ = register(SYSCALL_VFS_READ_BY_INODE, sys_vfs_read_by_inode);
+    let _ = register(SYSCALL_VFS_LOOKUP, sys_vfs_lookup);
     let _ = register(SYSCALL_EXEC, sys_exec);
     let _ = register(SYSCALL_FORK, sys_fork);
     let _ = register(SYSCALL_BLOCK_READ, sys_block_read);

@@ -17,16 +17,38 @@ use embeddings::*;
 
 const READ_CHUNK: usize = 4096;
 const LIST_BUF: usize = 65536;
+const MODEL_BUF_LEN: usize = 65536;
+
+/// Buffer estático para el modelo serializado .semb (evita alloc en no_std).
+static mut MODEL_BUF: [u8; MODEL_BUF_LEN] = [0u8; MODEL_BUF_LEN];
+
+const MODEL_PATH_LEN: usize = 17;
+static MODEL_PATH_BYTES: [u8; MODEL_PATH_LEN] = *b"/minilm_int8.semb";
+
+/// Devuelve la ruta del modelo serializado de embeddings.
+fn model_path() -> &'static [u8] {
+    &MODEL_PATH_BYTES
+}
 
 /// Punto de entrada del kernel (llamado por el cargador ELF).
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println("shardevos-search v0.2.0");
     serial_println("Inicializando motor de embeddings...");
-    unsafe {
-        embeddings::init_embedding_model();
+    let mut model_loaded = false;
+    if load_external_model() {
+        model_loaded = true;
     }
-    serial_println("Modelo de embeddings listo.");
+    if !model_loaded {
+        unsafe {
+            embeddings::init_embedding_model();
+        }
+    }
+    serial_println(if model_loaded {
+        "Modelo .semb cargado."
+    } else {
+        "Usando modelo integrado."
+    });
 
     // Indexar automáticamente al arrancar (modo demo; sin entrada serial requerida)
     cmd_index();
@@ -44,6 +66,42 @@ pub extern "C" fn _start() -> ! {
 
     serial_println("Busqueda completada.");
     sys_exit(0);
+}
+
+/// Carga el modelo serializado (.semb) desde el VFS. Devuelve true si fue exitoso.
+fn load_external_model() -> bool {
+    unsafe {
+        let inode = match sys_vfs_lookup(model_path()) {
+            Ok(inode_id) => inode_id,
+            Err(e) => {
+                let _ = e;
+                return false;
+            }
+        };
+
+        let mut total: usize = 0;
+        let mut chunk = [0u8; READ_CHUNK];
+        while total < MODEL_BUF_LEN {
+            let n = match sys_vfs_read_by_inode(inode, total, &mut chunk) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = e;
+                    return false;
+                }
+            };
+            if n == 0 {
+                break;
+            }
+            MODEL_BUF[total..total + n].copy_from_slice(&chunk[..n]);
+            total += n;
+            if n < chunk.len() {
+                break;
+            }
+        }
+
+        let result = crate::embeddings::load_embedding_model_from_bytes(&MODEL_BUF[..total]);
+        result.is_ok()
+    }
 }
 
 /// Comando index: lista inodos, lee archivos, genera embeddings.
@@ -90,9 +148,10 @@ fn cmd_index() {
                             Ok(r) if r > 0 => {
                                 if !embedded {
                                     // Generar embedding real y registrarlo en el conector semántico
-                                    let text = core::str::from_utf8(&chunk[..r]).unwrap_or("");
-                                    if index_document(inode_id, text) {
-                                        indexed += 1;
+                                    if let Ok(text) = core::str::from_utf8(&chunk[..r]) {
+                                        if index_document(inode_id, text) {
+                                            indexed += 1;
+                                        }
                                     }
                                     embedded = true;
                                 }

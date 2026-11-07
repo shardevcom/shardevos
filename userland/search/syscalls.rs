@@ -19,6 +19,7 @@ pub mod nr {
     pub const STAT: usize = 6;
     pub const VFS_LIST: usize = 23;
     pub const VFS_READ_BY_INODE: usize = 24;
+    pub const VFS_LOOKUP: usize = 43;
     pub const NET_SOCKET: usize = 36;
     pub const NET_BIND: usize = 37;
     pub const NET_CONNECT: usize = 38;
@@ -109,6 +110,17 @@ pub fn sys_vfs_list(buf: &mut [u8]) -> Result<usize, SysError> {
 #[inline(always)]
 pub fn sys_vfs_read_by_inode(inode_id: usize, offset: usize, buf: &mut [u8]) -> Result<usize, SysError> {
     let ret = syscall(nr::VFS_READ_BY_INODE, inode_id, offset, buf.as_mut_ptr() as usize, buf.len(), 0, 0);
+    if ret < 0 {
+        Err(unsafe { core::mem::transmute(ret as isize) })
+    } else {
+        Ok(ret as usize)
+    }
+}
+
+/// Resuelve una ruta del VFS y devuelve su inodo.
+#[inline(always)]
+pub fn sys_vfs_lookup(path: &[u8]) -> Result<usize, SysError> {
+    let ret = syscall(nr::VFS_LOOKUP, path.as_ptr() as usize, path.len(), 0, 0, 0, 0);
     if ret < 0 {
         Err(unsafe { core::mem::transmute(ret as isize) })
     } else {
