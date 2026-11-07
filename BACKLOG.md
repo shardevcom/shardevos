@@ -237,6 +237,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F21-04 | Scroll/gestos ratón/touch a ventana | Handler en `Scroll`/`GestureSwipe` desplaza la ventana enfocada | ✅ |
 | F22-01 | Espacios de dirección por hilo/proceso | `Scheduler::create_thread_with_address_space` asigna CR3 del hilo (espacio de usuario) | ✅ |
 | F22-02 | Fork con espacio de dirección | `sys_fork` crea un hilo del hijo con el PML4 (CR3) creado | ✅ |
+| F22-03 | Ejecución en modo usuario con PML4 propio | `userland_loader::load_and_run_userland` crea PML4 de usuario, mapea stack/segmentos y salta vía `run_user_program` | ✅ |
 
 ---
 

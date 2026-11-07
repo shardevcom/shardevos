@@ -86,6 +86,51 @@ pub fn load_and_run_userland(bytes: &[u8]) -> Result<(), &'static str> {
 
     crate::vga_print_line("shardev OS: Saltando al programa de usuario...", 21, 0x0F);
 
-    let entry: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry_point) };
-    entry()
+    let user_pml4 = unsafe { crate::mm::paging::create_user_pml4() }
+        .map_err(|_| "No se pudo crear el PML4 de usuario")?;
+    for i in 0..e_phnum {
+        let ph = e_phoff + i * e_phentsize;
+        let p_type = read_u32(bytes, ph);
+        if p_type != 1 {
+            continue;
+        }
+        let p_offset = read_u64(bytes, ph + 8) as usize;
+        let p_vaddr = read_u64(bytes, ph + 16) as usize;
+        let p_filesz = read_u64(bytes, ph + 32) as usize;
+        let p_memsz = read_u64(bytes, ph + 40) as usize;
+        unsafe {
+            crate::mm::paging::map_in(
+                user_pml4,
+                p_vaddr,
+                p_vaddr,
+                crate::mm::paging::PAGE_PRESENT | crate::mm::paging::PAGE_WRITABLE,
+            );
+            if p_memsz > p_filesz {
+                crate::mm::paging::map_in(
+                    user_pml4,
+                    p_vaddr + p_filesz,
+                    p_vaddr + p_filesz,
+                    crate::mm::paging::PAGE_PRESENT | crate::mm::paging::PAGE_WRITABLE,
+                );
+            }
+        }
+    }
+
+    const USER_STACK_VADDR: usize = 0x300000;
+    const USER_STACK_SIZE: usize = 0x10000;
+    let stack_pages = USER_STACK_SIZE / crate::mm::PAGE_SIZE;
+    for i in 0..stack_pages {
+        let frame = unsafe { crate::mm::frame_allocator::alloc_frame() }
+            .map_err(|_| "No se pudo reservar stack de usuario")?;
+        unsafe {
+            crate::mm::paging::map_in(
+                user_pml4,
+                USER_STACK_VADDR + (i * crate::mm::PAGE_SIZE),
+                crate::mm::frame_to_addr(frame),
+                crate::mm::paging::PAGE_PRESENT | crate::mm::paging::PAGE_WRITABLE,
+            );
+        }
+    }
+
+    unsafe { crate::sched::run_user_program(entry_point, USER_STACK_VADDR + USER_STACK_SIZE, user_pml4) }
 }

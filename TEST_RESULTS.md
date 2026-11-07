@@ -535,6 +535,12 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 |------------|-----------|-------------|
 | Fork thread address space | `kernel/syscall/mod.rs` | `sys_fork` crea un hilo con el PML4 (CR3) del hijo |
 
+### 8.7 Ejecución en modo usuario con PML4 propio (F22-03)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| User exec address space | `kernel/userland_loader.rs` | Crea PML4 de usuario, mapea stack/segmentos y usa `run_user_program` |
+
 
 ### 8.3 Estado de validación
 
