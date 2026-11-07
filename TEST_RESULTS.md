@@ -547,6 +547,12 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 |------------|-----------|-------------|
 | User security context | `kernel/userland_loader.rs` | Resetea contexto de seguridad a no autenticado antes de `run_user_program` |
 
+### 8.9 Fork con contexto de seguridad (F22-05)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Fork security context | `kernel/syscall/mod.rs` | `sys_fork` resetea contexto de seguridad a no autenticado para el hijo |
+
 
 ### 8.3 Estado de validación
 

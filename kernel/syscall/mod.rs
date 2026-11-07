@@ -544,6 +544,10 @@ fn sys_fork(_args: SyscallArgs) -> SyscallResult {
         pml4_addr,
     ).map_err(|_| SyscallError::Fault)?;
 
+    unsafe {
+        crate::syscall::set_current_security_ctx(crate::security::SecurityContext::new_unauthenticated());
+    }
+
     Ok(pid as usize)
 }
 
