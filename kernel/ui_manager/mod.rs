@@ -18,7 +18,11 @@ pub use self::display_server::{DisplayServer, global_display_server};
 pub use self::responsive::{Breakpoint, BreakpointRule, DeviceCategory, Orientation, ResponsiveConfig, ResponsiveManager, global_responsive_manager};
 pub use self::window::{Framebuffer, Window, WindowId, WindowProperties, WindowState, WindowManager, global_window_manager};
 
+use crate::input::{global_manager, InputEvent, InputEventType, InputSource, TouchPoint};
 use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Contador global de eventos de input procesados por el UI Manager.
+static UI_INPUT_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 /// Resolución de pantalla.
 #[derive(Debug, Clone, Copy)]
@@ -91,4 +95,47 @@ pub fn is_initialized() -> bool {
 /// Inicializa el servidor de display.
 pub unsafe fn init() {
     DISPLAY_SERVER.store(1, Ordering::Release);
+}
+
+/// Procesa un evento de input unificado (touch/gesture/mouse) para el UI.
+pub fn handle_ui_input_event(_event: InputEvent) {
+    UI_INPUT_EVENTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Devuelve el último contador de eventos de input procesados por el UI.
+pub fn ui_input_events_last() -> u64 {
+    UI_INPUT_EVENTS.load(Ordering::Acquire)
+}
+
+/// Inicializa el input manager y registra el handler de UI.
+pub unsafe fn init_input() -> bool {
+    let manager = global_manager();
+    if !manager.is_initialized() {
+        manager.init();
+    }
+    manager.register_handler(handle_ui_input_event).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_input_event_counter_increments() {
+        let before = ui_input_events_last();
+        let event = InputEvent {
+            event_type: InputEventType::Scroll,
+            source: InputSource::Mouse,
+            timestamp_us: 0,
+            sequence_id: 0,
+            point: TouchPoint { x: 0, y: 0, pressure: 0, timestamp_us: 0 },
+            point2: None,
+            drag: None,
+            pinch_scale: 0.0,
+            rotation_deg: 0.0,
+            touch_id: 0,
+        };
+        handle_ui_input_event(event);
+        assert!(ui_input_events_last() > before);
+    }
 }

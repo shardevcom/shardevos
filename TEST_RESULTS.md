@@ -494,6 +494,29 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 
 ---
 
+## 8. Fase 21 — UI gráfica con ventanas y compositor (v1.6.0)
+
+### 8.1 Integrar compositor en renderizado
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Compositor + ventana | `kernel/main.rs` | Init compositor/WM, crear ventana, set framebuffer, `composite_frame` |
+
+### 8.2 Integración base de input (F21-02)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Handler de input | `kernel/ui_manager/mod.rs` | `handle_ui_input_event`, `ui_input_events_last`, `init_input` |
+| Registro en kernel | `kernel/main.rs` | `crate::ui_manager::init_input()` dentro del renderizado grafico |
+
+### 8.3 Estado de validación
+
+| Prueba | Comando | Resultado |
+|--------|---------|-----------|
+| Compilación del kernel | `./build/build.sh build` | ✅ OK |
+
+---
+
 ## 9. Limitaciones conocidas
 
 - Salida por puerto serie COM1 no visible en entorno QEMU de prueba (configuración de terminal)

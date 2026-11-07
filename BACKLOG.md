@@ -20,7 +20,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F8 | Pruebas, simulación QEMU, documentación y release | ✅ Completada | 100% |
 | F19 | Embeddings cuantizados INT8 y búsqueda semántica (v1.4.0) | ✅ Completada | 100% |
 | F20 | Modelo serializado .semb e integración VFS (v1.5.0) | ✅ Completada | 100% |
-| F21 | UI gráfica con ventanas y compositor (v1.6.0) | ✅ En progreso | 25% |
+| F21 | UI gráfica con ventanas y compositor (v1.6.0) | ✅ En progreso | 50% |
 
 ---
 
@@ -232,7 +232,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | ID | Título | Descripción | Estado |
 |----|--------|-------------|--------|
 | F21-01 | Integrar compositor en renderizado | `kernel/main.rs`: init compositor/WM, crear ventana, set framebuffer, `composite_frame` | ✅ |
-| F21-02 | Ratón/touch/gestos | Integración de input unificado con ventana y compositor | ⏳ |
+| F21-02 | Ratón/touch/gestos | Integración de input unificado con ventana y compositor | ✅ |
 
 ---
 

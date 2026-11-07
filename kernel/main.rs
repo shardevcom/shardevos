@@ -242,6 +242,7 @@ pub extern "C" fn kernel_main() -> ! {
 
                 // Fase 21-01: Integrar compositor de ventanas en el renderizado grafico
                 unsafe {
+                    crate::ui_manager::init_input();
                     let wm = crate::ui_manager::global_window_manager();
                     let comp = crate::ui_manager::global_compositor();
                     wm.init();
