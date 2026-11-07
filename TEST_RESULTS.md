@@ -509,6 +509,13 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 | Handler de input | `kernel/ui_manager/mod.rs` | `handle_ui_input_event`, `ui_input_events_last`, `init_input` |
 | Registro en kernel | `kernel/main.rs` | `crate::ui_manager::init_input()` dentro del renderizado grafico |
 
+### 8.3 Aplicación de gestos/mouse a ventana (F21-03)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Focus topmost | `kernel/ui_manager/window.rs` | `WindowManager::focus_topmost_visible` |
+| Handler | `kernel/ui_manager/mod.rs` | Enfoca ventana en `TouchDown`/`GestureTap` |
+
 ### 8.3 Estado de validación
 
 | Prueba | Comando | Resultado |

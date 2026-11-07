@@ -98,8 +98,11 @@ pub unsafe fn init() {
 }
 
 /// Procesa un evento de input unificado (touch/gesture/mouse) para el UI.
-pub fn handle_ui_input_event(_event: InputEvent) {
+pub fn handle_ui_input_event(event: InputEvent) {
     UI_INPUT_EVENTS.fetch_add(1, Ordering::Relaxed);
+    if matches!(event.event_type, InputEventType::TouchDown | InputEventType::GestureTap) {
+        let _ = global_window_manager().focus_topmost_visible();
+    }
 }
 
 /// Devuelve el último contador de eventos de input procesados por el UI.

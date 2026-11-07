@@ -233,6 +233,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 |----|--------|-------------|--------|
 | F21-01 | Integrar compositor en renderizado | `kernel/main.rs`: init compositor/WM, crear ventana, set framebuffer, `composite_frame` | ✅ |
 | F21-02 | Ratón/touch/gestos | Integración de input unificado con ventana y compositor | ✅ |
+| F21-03 | Aplicar gestos/mouse a ventana | Handler de input enfoca la primera ventana visible con mayor orden Z en `TouchDown`/`GestureTap` | ✅ |
 
 ---
 

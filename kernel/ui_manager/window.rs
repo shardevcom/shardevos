@@ -109,6 +109,7 @@ pub struct WindowManager {
     window_count: AtomicU64,
     next_z_order: AtomicU64,
     initialized: AtomicU64,
+    focused_window: AtomicU64,
 }
 
 // SpinLock para WindowManager
@@ -172,6 +173,7 @@ impl WindowManager {
             window_count: AtomicU64::new(0),
             next_z_order: AtomicU64::new(0),
             initialized: AtomicU64::new(0),
+            focused_window: AtomicU64::new(0),
         }
     }
 
@@ -181,6 +183,39 @@ impl WindowManager {
 
     pub fn is_initialized(&self) -> bool {
         self.initialized.load(Ordering::Acquire) != 0
+    }
+
+    /// Devuelve la ventana enfocada.
+    pub fn focused_window(&self) -> u64 {
+        self.focused_window.load(Ordering::Acquire)
+    }
+
+    /// Enfoca una ventana.
+    pub fn focus_window(&self, id: WindowId) -> UiResult<()> {
+        if !self.is_initialized() {
+            return Err(UiError::NotInitialized);
+        }
+        self.focused_window.store(id, Ordering::Release);
+        Ok(())
+    }
+
+    /// Enfoca la primera ventana visible con mayor orden Z.
+    pub fn focus_topmost_visible(&self) -> UiResult<WindowId> {
+        if !self.is_initialized() {
+            return Err(UiError::NotInitialized);
+        }
+        let windows = self.windows.lock();
+        let mut best: Option<Window> = None;
+        let mut best_z = 0u32;
+        for window in windows.iter().flatten() {
+            if window.state == WindowState::Shown && (best.is_none() || window.z_order > best_z) {
+                best = Some(*window);
+                best_z = window.z_order;
+            }
+        }
+        let id = best.ok_or(UiError::WindowNotFound)?.id;
+        self.focused_window.store(id, Ordering::Release);
+        Ok(id)
     }
 
     /// Crea una nueva ventana.
