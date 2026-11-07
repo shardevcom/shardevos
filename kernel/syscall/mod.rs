@@ -233,12 +233,22 @@ pub fn dispatch(args: SyscallArgs) -> SyscallResult {
     if SYSCALL_INIT.load(core::sync::atomic::Ordering::Acquire) == 0 {
         return Err(SyscallError::NotImplemented);
     }
+    if is_privileged_syscall(args.nr) {
+        let ctx = current_security_ctx();
+        if !ctx.authenticated {
+            return Err(SyscallError::PermissionDenied);
+        }
+    }
     unsafe {
         match SYSCALL_TABLE[args.nr as usize] {
             Some(handler) => handler(args),
             None => Err(SyscallError::InvalidNr),
         }
     }
+}
+
+fn is_privileged_syscall(nr: SyscallNr) -> bool {
+    matches!(nr, SYSCALL_SETUID | SYSCALL_SETGID)
 }
 
 /// Manejador por defecto para syscalls no implementados.

@@ -553,6 +553,12 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 |------------|-----------|-------------|
 | Fork security context | `kernel/syscall/mod.rs` | `sys_fork` resetea contexto de seguridad a no autenticado para el hijo |
 
+### 8.10 Enforcement de contexto de seguridad en syscalls (F23-01)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Security gate | `kernel/syscall/mod.rs` | `dispatch` rechaza `SYSCALL_SETUID`/`SYSCALL_SETGID` sin contexto autenticado |
+
 
 ### 8.3 Estado de validación
 
