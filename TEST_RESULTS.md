@@ -1,7 +1,7 @@
-# shardevos — Resultados de Pruebas (Fase 8)
+# shardevos — Resultados de Pruebas (v1.4.0)
 
 Fecha: Noviembre 2026  
-Versión: v0.1.0  
+Versión: v1.4.0  
 
 ---
 
@@ -14,7 +14,8 @@ Versión: v0.1.0
 | Tests unitarios binfmt_loader | ✅ 10/10 pasan | Detección y parseo PE/ELF/MachO |
 | Parseo de binario ELF real | ✅ Pasa | `userland/hello.elf` (entry=0x150000, 5 secciones) |
 | ISO booteable | ✅ Generada | `build/ShardevOS.iso` (6.0 MB, GRUB Multiboot2) |
-| AI Engine | ⚠️ Integrado | Módulos compilan; tests funcionales requieren modelos externos |
+| AI Engine | ✅ Integrado | STT/TTS/SLM compilan; motor de embeddings INT8 con 16 tests unitarios |
+| Embeddings INT8 | ✅ 16/16 pasan | 8 tests en kernel y 8 en userspace (cuantización, coseno, tokenizador, índice semántico) |
 | Self-Healing | ⚠️ Integrado | Módulo compila; pruebas de fallo pendientes |
 
 ---
@@ -399,6 +400,57 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 - QEMU arranca con VirtIO-Net y stack TCP funcional
 - Los syscalls de red (36-42) están operativos
 - `ping.elf` y `search.elf` se ejecutan al arrancar
+
+---
+
+## 8. Fase 19 — Embeddings cuantizados INT8 (v1.4.0)
+
+### 8.1 Módulo de embeddings en el AI Engine
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `Embedding` | `kernel/ai_engine/embeddings.rs` | Vector INT8 de 64 dimensiones con escala y punto cero |
+| `from_f32()` / `get()` | `kernel/ai_engine/embeddings.rs` | Cuantización y decuantización simétrica con clamp `[-128, 127]` |
+| `cosine_similarity()` | `kernel/ai_engine/embeddings.rs` | Similitud de coseno sobre vectores decuantizados |
+| `Tokenizer` | `kernel/ai_engine/embeddings.rs` | Tokenización por palabras con vocabulario de 512 entradas y centinela de padding/desconocido |
+| `EmbeddingModel` | `kernel/ai_engine/embeddings.rs` | Matriz `512 x 64` INT8, promedio de tokens y `text_similarity()` |
+| `sqrt_f32()` / `round_f32()` | `kernel/ai_engine/embeddings.rs` | Implementaciones no_std (Newton-Raphson y redondeo) para evitar `f32::sqrt/round` |
+| `init_embedding_model()` | `kernel/main.rs` | Inicializa el modelo al arrancar el kernel |
+
+### 8.2 Conector de búsqueda semántica
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| `EmbeddingIndex` | kernel y userspace | Índice acotado de 256 entradas `(inodo, embedding)` sin allocador |
+| `SearchHit` | kernel y userspace | Resultado `{ inode_id, similarity }` |
+| `search()` / `search_text()` | kernel y userspace | Top-k por similitud de coseno con inserción ordenada en buffer fijo |
+| `index_document()` / `semantic_search()` | kernel y userspace | API de conveniencia sobre el modelo y el índice globales |
+
+### 8.3 Integración en el buscador de archivos
+
+- `userland/search/main.rs` indexa cada inodo con `index_document(inode_id, texto)`.
+- La consulta de demostración usa `semantic_search("archivo", &mut hits)` y muestra inodo + similitud.
+- Se eliminó el placeholder de hash FNV y el array manual de top-k.
+
+### 8.4 Correcciones realizadas durante la fase
+
+| Problema | Corrección |
+|----------|------------|
+| `f32::sqrt()`/`f32::round()` no disponibles en `no_std` | Helpers `sqrt_f32()` y `round_f32()` |
+| Matriz de embeddings con 62 elementos en el kernel | Construcción con `[0i8; EMBEDDING_DIM]` |
+| Token ID 0 (primera palabra) se descartaba como padding | Centinela `VOCAB_SIZE` para padding/desconocido |
+| Llave extra en `userland/search/embeddings.rs` | Eliminada |
+| `init_embedding_model` no exportado por `ai_engine` | Re-export en `kernel/ai_engine/mod.rs` |
+
+### 8.5 Estado de validación
+
+| Prueba | Comando | Resultado |
+|--------|---------|-----------|
+| Tests de embeddings (kernel) | `rustc --edition 2021 --test kernel/ai_engine/embeddings.rs` | ✅ 8/8 |
+| Tests de embeddings (userspace) | `rustc --edition 2021 --test userland/search/embeddings.rs` | ✅ 8/8 |
+| Compilación del kernel | `./build/build.sh build` | ✅ OK |
+| Compilación de `search.elf` | `rustc --target x86_64-unknown-none ... userland/search/main.rs` | ✅ OK |
+| Arranque en QEMU | `./build/build.sh run` | ✅ GRUB carga el kernel, sin triple fault (salida serie no visible) |
 
 ---
 

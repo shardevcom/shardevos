@@ -4,124 +4,46 @@
 //!   index  — lista inodos del VFS, lee cada archivo, genera embedding y guarda índice en memoria
 //!   search — lee una consulta por serial, genera su embedding y devuelve top-k por coseno
 //!
-//! Nota: el embedding aquí es un placeholder ligero (hash sobre contenido). Para producción,
-//! reemplazar `embed()` por una llamada a un modelo de embeddings quantizado
-//! (ej. all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp compilado como binario ELF de usuario).
+//! Usa el módulo de embeddings quantizado (INT8) para generar vectores semánticos reales
+//! en lugar del placeholder basado en hash FNV.
 
 #![no_std]
 #![no_main]
 
-#[path = "syscalls.rs"]
 mod syscalls;
+mod embeddings;
 use syscalls::*;
+use embeddings::*;
 
-const MAX_FILES: usize = 256;
-const EMB_DIM: usize = 64;
 const READ_CHUNK: usize = 4096;
 const LIST_BUF: usize = 65536;
 
-#[derive(Copy, Clone)]
-#[repr(C)]
-struct IndexEntry {
-    inode_id: u64,
-    size: u64,
-    embedding: [f32; EMB_DIM],
-}
-
-static mut INDEX: [Option<IndexEntry>; MAX_FILES] = [None; MAX_FILES];
-static mut INDEX_COUNT: usize = 0;
-
-/// Panic handler para userspace no_std.
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    serial_println("PANIC en userspace search");
-    loop {
-        core::hint::spin_loop();
-    }
-}
-
-/// Punto de entrada (llamado por el cargador ELF del kernel).
+/// Punto de entrada del kernel (llamado por el cargador ELF).
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    serial_println("shardevos-search v0.1.0");
+    serial_println("shardevos-search v0.2.0");
+    serial_println("Inicializando motor de embeddings...");
+    unsafe {
+        embeddings::init_embedding_model();
+    }
+    serial_println("Modelo de embeddings listo.");
 
     // Indexar automáticamente al arrancar (modo demo; sin entrada serial requerida)
     cmd_index();
 
-    // Luego hacer una búsqueda de demostración con consulta "demo"
-    serial_println("Busqueda demo: 'demo'");
-    let query = b"demo";
-    let query_emb = embed(query);
+    // Búsqueda de demostración usando el conector semántico
+    serial_println("Busqueda demo: 'archivo'");
     serial_println("Resultados (top-5):");
-    let mut best: [(f32, usize); 5] = [(-1.0, 0); 5];
-    let count = unsafe { INDEX_COUNT };
-    for i in 0..count {
-        if let Some(entry) = unsafe { INDEX[i] } {
-            let sim = cosine(&query_emb, &entry.embedding);
-            for j in 0..5 {
-                if sim > best[j].0 {
-                    for k in (1..=j).rev() {
-                        best[k] = best[k - 1];
-                    }
-                    best[j] = (sim, i);
-                    break;
-                }
-            }
-        }
-    }
-    for j in 0..5 {
-        if best[j].0 > 0.0 {
-            if let Some(entry) = unsafe { INDEX[best[j].1] } {
-                serial_print_hex(entry.inode_id);
-                serial_print("  sim=");
-                serial_print_f32(best[j].0);
-                serial_print("  size=");
-                serial_print_usize(entry.size as usize);
-            }
-        }
+    let mut hits = [SearchHit::empty(); 5];
+    let found = semantic_search("archivo", &mut hits);
+    for hit in hits.iter().take(found) {
+        serial_print_hex(hit.inode_id);
+        serial_print("  sim=");
+        serial_print_f32(hit.similarity);
     }
 
     serial_println("Busqueda completada.");
     sys_exit(0);
-}
-
-/// Genera un embedding placeholder (64 f32) a partir del contenido.
-/// Para producción: llamar a un modelo de embeddings real (ggml/llama.cpp).
-fn embed(content: &[u8]) -> [f32; EMB_DIM] {
-    let mut emb = [0.0f32; EMB_DIM];
-    if content.is_empty() {
-        return emb;
-    }
-    let mut h: u64 = 1469598103934665603; // FNV offset
-    for &b in content {
-        h ^= b as u64;
-        h = h.wrapping_mul(1099511628211); // FNV prime
-        for i in 0..EMB_DIM {
-            let bit = ((h >> (i % 64)) & 1) as f32;
-            emb[i] += bit * (b as f32 / 255.0);
-        }
-    }
-    // Normalizar L2
-    let mut norm: f32 = 0.0;
-    for &v in emb.iter() {
-        norm += v * v;
-    }
-    norm = sqrt_f32(norm);
-    if norm > 0.0 {
-        for v in emb.iter_mut() {
-            *v /= norm;
-        }
-    }
-    emb
-}
-
-/// Similitud de coseno entre dos vectores ya normalizados.
-fn cosine(a: &[f32; EMB_DIM], b: &[f32; EMB_DIM]) -> f32 {
-    let mut s: f32 = 0.0;
-    for i in 0..EMB_DIM {
-        s += a[i] * b[i];
-    }
-    s
 }
 
 /// Comando index: lista inodos, lee archivos, genera embeddings.
@@ -154,35 +76,25 @@ fn cmd_index() {
                         continue;
                     }
 
-                    // Leer contenido del archivo en chunks (primer chunk para embedding placeholder)
+                    // Leer contenido del archivo (primer chunk para embedding)
                     let mut chunk = [0u8; READ_CHUNK];
                     let mut total_read = 0usize;
                     let mut file_offset = 0usize;
                     let size_usize = size as usize;
                     let limit = size_usize.min(65536); // limitar a 64 KB por archivo
 
+                    let mut embedded = false;
                     while total_read < limit {
                         let to_read = (limit - total_read).min(READ_CHUNK);
                         match sys_vfs_read_by_inode(inode_id as usize, file_offset, &mut chunk[..to_read]) {
                             Ok(r) if r > 0 => {
-                                // Copiar al contenido acumulado (buffer fijo)
-                                let end = (total_read + r).min(65536);
-                                // Aquí no podemos acumular en Vec; usamos embed incremental
-                                // Para simplicidad, embed solo el primer chunk
-                                if total_read == 0 {
-                                    // embed del primer chunk (placeholder)
-                                    let emb = embed(&chunk[..r]);
-                                    if unsafe { INDEX_COUNT } < MAX_FILES {
-                                        unsafe {
-                                            INDEX[INDEX_COUNT] = Some(IndexEntry {
-                                                inode_id,
-                                                size,
-                                                embedding: emb,
-                                            });
-                                            INDEX_COUNT += 1;
-                                        }
+                                if !embedded {
+                                    // Generar embedding real y registrarlo en el conector semántico
+                                    let text = core::str::from_utf8(&chunk[..r]).unwrap_or("");
+                                    if index_document(inode_id, text) {
                                         indexed += 1;
                                     }
+                                    embedded = true;
                                 }
                                 total_read += r;
                                 file_offset += r;
@@ -201,54 +113,6 @@ fn cmd_index() {
         Err(e) => {
             serial_println("Error en VFS_LIST: ");
             serial_print_hex(e as isize as u64);
-        }
-    }
-}
-
-/// Comando search: lee consulta, busca top-k por coseno.
-fn cmd_search() {
-    serial_println("Ingrese consulta:");
-    let mut query_buf = [0u8; 256];
-    let n = match sys_read(0, &mut query_buf) {
-        Ok(n) => n,
-        _ => 0,
-    };
-    if n == 0 {
-        serial_println("Consulta vacía");
-        return;
-    }
-    let query = &query_buf[..n];
-    let query_emb = embed(query);
-
-    // Buscar top-5
-    let mut best: [(f32, usize); 5] = [(-1.0, 0); 5];
-    let count = unsafe { INDEX_COUNT };
-    for i in 0..count {
-        if let Some(entry) = unsafe { INDEX[i] } {
-            let sim = cosine(&query_emb, &entry.embedding);
-            // Insertar en best ordenado
-            for j in 0..5 {
-                if sim > best[j].0 {
-                    for k in (1..=j).rev() {
-                        best[k] = best[k - 1];
-                    }
-                    best[j] = (sim, i);
-                    break;
-                }
-            }
-        }
-    }
-
-    serial_println("Resultados (top-5):");
-    for j in 0..5 {
-        if best[j].0 > 0.0 {
-            if let Some(entry) = unsafe { INDEX[best[j].1] } {
-                serial_print_hex(entry.inode_id);
-                serial_print("  sim=");
-                serial_print_f32(best[j].0);
-                serial_print("  size=");
-                serial_print_usize(entry.size as usize);
-            }
         }
     }
 }
@@ -274,20 +138,79 @@ fn serial_print_f32(val: f32) {
     serial_println("");
 }
 
-/// Raíz cuadrada aproximada (Newton-Raphson) para no_std sin f32::sqrt.
-fn sqrt_f32(mut x: f32) -> f32 {
-    if x == 0.0 {
-        return 0.0;
+/// Imprime un u64 en hexadecimal por serial.
+pub fn serial_print_hex(val: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = [0u8; 18];
+    out[0] = b'0';
+    out[1] = b'x';
+    for i in 0..16 {
+        let nibble = ((val >> ((15 - i) * 4)) & 0xF) as usize;
+        out[2 + i] = HEX[nibble];
     }
-    if x < 0.0 {
-        return 0.0;
+    out[16] = b'\r';
+    out[17] = b'\n';
+    let _ = sys_write(1, &out);
+}
+
+/// Imprime un usize en decimal por serial.
+pub fn serial_print_usize(val: usize) {
+    if val == 0 {
+        serial_println("0");
+        return;
     }
-    let mut g = x / 2.0;
-    if g == 0.0 {
-        g = 1.0;
+    let mut buf = [0u8; 20];
+    let mut n = val;
+    let mut i = 0;
+    while n > 0 {
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        i += 1;
     }
-    for _ in 0..8 {
-        g = (g + x / g) / 2.0;
+    let mut out = [0u8; 22];
+    let mut j = 0;
+    while i > 0 {
+        i -= 1;
+        out[j] = buf[i];
+        j += 1;
     }
-    g
+    out[j] = b'\n';
+    let _ = sys_write(1, &out[..=j]);
+}
+
+/// Imprime una cadena por serial (stdout).
+pub fn serial_print(s: &str) {
+    let _ = sys_write(1, s.as_bytes());
+}
+
+/// Imprime una línea por serial (stdout).
+pub fn serial_println(s: &str) {
+    let _ = sys_write(1, s.as_bytes());
+    let _ = sys_write(1, b"\n");
+}
+
+/// Punto de entrada del kernel (llamado por el cargador ELF).
+#[no_mangle]
+pub extern "C" fn _start_kernel() -> ! {
+    serial_println("shardevos-search v0.2.0");
+    serial_println("Inicializando motor de embeddings...");
+    unsafe {
+        embeddings::init_embedding_model();
+    }
+    serial_println("Modelo de embeddings listo.");
+
+    // Indexar automáticamente al arrancar
+    cmd_index();
+
+    serial_println("Indexador listo.");
+    sys_exit(0);
+}
+
+/// Panic handler para userspace no_std.
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    serial_println("PANIC en userspace search");
+    loop {
+        core::hint::spin_loop();
+    }
 }

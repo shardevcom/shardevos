@@ -1,7 +1,7 @@
-# shardevos — Release v1.3.0
+# shardevos — Release v1.4.0
 
 > **shardevos** — Sistema Operativo Inteligente de Kernel Unificado  
-> Versión: 1.3.0 (Release estable con stack TCP completo para userspace)  
+> Versión: 1.4.0 (Release estable con búsqueda semántica y embeddings cuantizados INT8)  
 > Fecha: Noviembre 2026  
 > Arquitectura: Kernel monolítico modular en Rust (`no_std`) + Assembly x86_64  
 > Repositorio: git@github.com:shardevcom/shardevos.git  
@@ -12,7 +12,7 @@
 
 shardevos es un sistema operativo escrito desde cero en Rust y Assembly x86_64, diseñado para ejecutar binarios heterogéneos (PE/ELF/MachO) nativamente, con un pipeline de entrada unificado, motor de IA multimodal local, capacidades de autogestión, UI gráfica responsiva, y un sistema de seguridad multiusuario completo.
 
-Esta release **v1.1.0** añade persistencia de archivos en disco real, conectividad de red (VirtIO-Net + stack TCP/IP), y syscalls de gestión de identidad (setuid/setgid).
+Esta release **v1.4.0** añade un motor de embeddings cuantizados INT8 en el AI Engine, un conector de búsqueda semántica reutilizable y la integración de embeddings reales en el indexador/buscador de archivos de userspace. Sustituye el placeholder basado en hash por vectores semánticos con similitud de coseno.
 
 ---
 
@@ -31,7 +31,8 @@ Esta release **v1.1.0** añade persistencia de archivos en disco real, conectivi
 | **Red** | VirtIO-Net real + Stack TCP | Protocolo VirtIO 1.0 sobre MMIO, colas RX/TX, handshake TCP SYN/SYN-ACK/ACK, envío/recepción de segmentos TCP |
 | **Syscalls de red** | `socket/bind/connect/send/recv/close/ping` | Números 36-42 para acceso a red desde userspace |
 | **Interfaz gráfica** | UI Responsiva VESA | Modo gráfico 800x600@32 RGBA, framebuffer LFB, primitivas de dibujo, texto 8x8, barra de título |
-| **Búsqueda IA** | Indexador semántico | Indexa archivos por contenido, búsqueda top-5 por similitud de coseno, embeddings placeholder |
+| **Búsqueda IA** | Indexador semántico | Indexa archivos por contenido y devuelve top-k por similitud de coseno usando embeddings INT8 reales |
+| **Embeddings** | Motor INT8 | Vector de 64 dimensiones, tokenizador y modelo de 512 entradas; cuantización/decuantización y coseno sin `std`. Conector `EmbeddingIndex` para top-k |
 | **Seguridad** | Multiusuario | Usuarios/grupos (/etc/passwd, /etc/group), autenticación por contraseña, permisos rwx estilo Unix |
 | **Syscalls de seguridad** | `getuid`/`login`/`setuid`/`setgid` | Números 29-35 para gestión de identidad y autenticación |
 | **Total de syscalls** | 42 | Desde `exit` (1) hasta `net_ping` (42) |
@@ -46,7 +47,7 @@ Esta release **v1.1.0** añade persistencia de archivos en disco real, conectivi
 │  (PE/ELF/MachO binarios ejecutándose nativamente)           │
 ├─────────────────────────────────────────────────────────────┤
 │                    Capa de Syscalls Unificada               │
-│  (35 syscalls: exit/write/read/open/close/stat/exec/fork/   │
+│  (42 syscalls: exit/write/read/open/close/stat/exec/fork/   │
 │   block_read/block_write/getuid/geteuid/login/setuid/...)   │
 ├─────────────────────────────────────────────────────────────┤
 │                    Módulo de Seguridad                      │
@@ -147,7 +148,8 @@ shardevos/
 │   │   ├── mod.rs                # Motor de IA base
 │   │   ├── stt.rs                # Voz a Texto (whisper.cpp)
 │   │   ├── tts.rs                # Texto a Voz (Piper)
-│   │   └── slm.rs                # SLM con Function Calling
+│   │   ├── slm.rs                # SLM con Function Calling
+│   │   └── embeddings.rs         # Motor de embeddings INT8 + conector EmbeddingIndex
 │   ├── mm/
 │   │   ├── mod.rs                # Gestor de memoria (frame allocator, paginación)
 │   │   ├── frame_allocator.rs    # Bitmap allocator (1M marcos = 4 GB)
@@ -159,7 +161,8 @@ shardevos/
 ├── userland/                     # Binarios de usuario (PE/ELF/MachO)
 │   ├── hello.asm / hello.elf     # Programa de ejemplo
 │   └── search/                   # Indexador y buscador semántico de archivos
-│       ├── main.rs               # Indexador + buscador top-5 (coseno)
+│       ├── main.rs               # Indexador + buscador top-k (coseno, embeddings INT8)
+│       ├── embeddings.rs         # Conector de embeddings INT8 para userspace
 │       ├── syscalls.rs           # Wrappers de syscalls para userspace
 │       └── linker.ld             # Script de enlazado (0x150000)
 │
@@ -199,7 +202,7 @@ cd /home/elber/shardevos
 # Compilar y ejecutar en QEMU
 ./build/build.sh run
 
-# Compilar y crear imagen ISO booteable v1.2.0
+# Compilar y crear imagen ISO booteable v1.4.0
 ./build/build.sh iso
 
 # Compilar y ejecutar todo
@@ -241,12 +244,13 @@ Al ejecutar en QEMU, verás la salida por puerto serie y la UI gráfica VESA:
 [shardevos] [ OK ] VirtIO-Blk dispositivo de bloque detectado.
 [shardevos] [ OK ] VirtIO-Net dispositivo de red detectado.
 [shardevos] [ OK ] Stack de red inicializado (ARP, ICMP).
+[shardevos] [ OK ] Motor de embeddings IA inicializado.
 [shardevos] Kernel listo. UI gráfica activada.
 ```
 
 ---
 
-## 6. Syscalls Implementados (35 total)
+## 6. Syscalls Implementados (42 total)
 
 | Número | Nombre | Descripción |
 |--------|--------|-------------|
@@ -330,21 +334,20 @@ O usar imagen de disquete:
 | Limitación | Descripción | Plan |
 |------------|-------------|------|
 | Salida serial en QEMU | El puerto serie COM1 no siempre es visible en entornos de prueba headless | Usar modo gráfico VESA (funcional) |
-| AI Engine | Módulos integrados pero requieren modelos externos (whisper.cpp, Piper, Llama) para funcionar completamente | Conectar modelos quantizados en userspace |
+| AI Engine | Motor de embeddings INT8 con vocabulario integrado (demo); STT/TTS/SLM requieren modelos externos (whisper.cpp, Piper, Llama) | Cargar all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp en userspace (F20) |
 | setuid/setgid | Implementados pero solo para root; no hay cambio de identidad de usuario no-root | Ampliar a usuarios no-root con verificación |
-| syscalls de red para userspace | Stack TCP/IP en kernel pero sin syscalls para usarlo desde userspace | Agregar syscalls socket/connect/send/recv |
 | Multiusuario completo | Contexto de seguridad por proceso implementado; aislamiento completo de memoria entre usuarios pendiente | Paginación con espacios de direcciones aislados por usuario |
 
 ---
 
-## 9. Roadmap Futuro (v1.2.0+)
+## 9. Roadmap Futuro (v1.5.0+)
 
 | Versión | Características | Fase |
 |---------|---------------|------|
-| v1.2.0 | Syscalls de red para userspace (socket, connect, send, recv) | F17 |
-| v1.3.0 | AI Engine con modelo quantizado real (all-MiniLM-L6-v2 INT8) | F18-F19 |
-| v1.4.0 | UI con ventanas, compositor, ratón, gestos táctiles | F20-F21 |
-| v2.0.0 | Multiusuario completo con aislamiento de memoria, sandbox de procesos | F22-F24 |
+| v1.4.0 | Embeddings cuantizados INT8 y búsqueda semántica real (release actual) | F19 |
+| v1.5.0 | Carga de all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp en userspace | F20 |
+| v1.6.0 | UI con ventanas, compositor, ratón y gestos táctiles | F21-F22 |
+| v2.0.0 | Multiusuario completo con aislamiento de memoria y sandbox de procesos | F23-F25 |
 
 ---
 
@@ -358,4 +361,4 @@ O usar imagen de disquete:
 
 ---
 
-*Última actualización: Noviembre 2026 — Release v1.1.0*
+*Última actualización: Noviembre 2026 — Release v1.4.0*

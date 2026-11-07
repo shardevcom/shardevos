@@ -159,6 +159,12 @@ pub extern "C" fn kernel_main() -> ! {
         crate::vga_print_line("  [ OK ] Stack de red inicializado (ARP, ICMP).", 25, 0x0A);
     }
 
+    // Inicializar modelo de embeddings IA
+    unsafe {
+        crate::ai_engine::init_embedding_model();
+        crate::vga_print_line("  [ OK ] Motor de embeddings IA inicializado.", 26, 0x0A);
+    }
+
     // Inicializar modo gráfico VESA para la UI
     unsafe {
         let display = global_gfx_display();

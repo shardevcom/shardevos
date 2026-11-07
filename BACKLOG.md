@@ -18,6 +18,7 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F6 | Self-Healing & AI Scheduler (autogestión del kernel) | ✅ Completada | 100% |
 | F7 | VFS, sistemas de archivos y drivers de dispositivo | ✅ Completada | 100% |
 | F8 | Pruebas, simulación QEMU, documentación y release | ✅ Completada | 100% |
+| F19 | Embeddings cuantizados INT8 y búsqueda semántica (v1.4.0) | ✅ Completada | 100% |
 
 ---
 
@@ -147,9 +148,9 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 |----|--------|-------------|--------|
 | F9-01 | Syscall VFS_LIST + VFS_READ_BY_INODE | `SYSCALL_VFS_LIST` (23) lista inodos del VFS; `SYSCALL_VFS_READ_BY_INODE` (24) lee un inodo por ID | ✅ |
 | F9-02 | Wrappers de syscall para userspace | `userland/search/syscalls.rs` con wrappers `no_std` para exit/write/read/vfs_list/vfs_read_by_inode vía instrucción `syscall` | ✅ |
-| F9-03 | Indexador de archivos | `userland/search/main.rs` cmd `index`: lista inodos, lee archivos, genera embeddings (placeholder) y guarda índice en memoria | ✅ |
-| F9-04 | Buscador semántico top-k | `userland/search/main.rs` cmd `search`: genera embedding de consulta y devuelve top-5 por similitud de coseno | ✅ |
-| F9-05 | Modelo de embeddings ligero | Placeholder `embed()` en userspace; reemplazar por modelo quantizado (ej. all-MiniLM-L6-v2 INT8 vía ggml/llama.cpp compilado como ELF de usuario) | ⏳ |
+| F9-03 | Indexador de archivos | `userland/search/main.rs` cmd `index`: lista inodos, lee archivos, genera embeddings INT8 reales y los registra en el conector semántico | ✅ |
+| F9-04 | Buscador semántico top-k | `userland/search/main.rs`: genera embedding de consulta y devuelve top-5 vía `EmbeddingIndex::search_text` (similitud de coseno) | ✅ |
+| F9-05 | Modelo de embeddings ligero | Motor cuantizado INT8 (`kernel/ai_engine/embeddings.rs` + `userland/search/embeddings.rs`) con vocabulario integrado. La carga de all-MiniLM-L6-v2 vía ggml/llama.cpp queda para Fase 20 | ✅ |
 
 ---
 
@@ -199,6 +200,17 @@ Arquitectura: Kernel monolítico modular con cargador universal de binarios (PE/
 | F18-01 | Stack TCP en kernel | `kernel/drivers/net/tcp.rs`: cabecera TCP, handshake SYN/SYN-ACK/ACK, envío/recepción de segmentos, tabla de conexiones | ✅ |
 | F18-02 | Syscalls de red conectados | `NET_CONNECT` (38), `NET_SEND` (39), `NET_RECV` (40) ahora usan el stack TCP real sobre VirtIO-Net | ✅ |
 | F18-03 | Prueba de conectividad | QEMU con VirtIO-Net: kernel responde a ICMP echo y acepta conexiones TCP | ✅ |
+
+---
+
+## 5. Fase 19 — Embeddings cuantizados para búsqueda semántica (v1.4.0)
+
+| ID | Título | Descripción | Estado |
+|----|--------|-------------|--------|
+| F19-01 | Módulo de embeddings quantizado (INT8) para AI Engine | `kernel/ai_engine/embeddings.rs`: tokenizador, matriz de embeddings INT8, cuantización/decuantización, similitud de coseno y `sqrt`/`round` sin `std`; inicializado desde `kernel_main` | ✅ |
+| F19-02 | Conector de embeddings para búsqueda semántica | `EmbeddingIndex` + `SearchHit` en kernel y userspace: indexación por inodo, búsqueda top-k por coseno y API `index_document`/`semantic_search` sin allocador | ✅ |
+| F19-03 | Integrar embeddings reales en el buscador de archivos | `userland/search/main.rs`: indexa cada archivo con `embed_text`, consulta con `semantic_search` y muestra inodo + similitud (sin placeholder de hash) | ✅ |
+| F19-04 | Actualizar BACKLOG, TEST_RESULTS y RELEASE para v1.4.0 | Documentación de la fase, resultados de pruebas (16 tests de embeddings) y notas de release v1.4.0 | ✅ |
 
 ---
 

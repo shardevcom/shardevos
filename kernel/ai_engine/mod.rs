@@ -9,6 +9,9 @@
 pub mod stt;
 pub mod tts;
 pub mod slm;
+pub mod embeddings;
+
+pub use self::embeddings::{embed_text, init_embedding_model, text_similarity, Embedding, EMBEDDING_DIM};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
