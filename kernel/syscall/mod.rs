@@ -528,17 +528,22 @@ fn sys_exec(args: SyscallArgs) -> SyscallResult {
 /// Retorna el PID del hijo al padre, 0 al hijo.
 fn sys_fork(_args: SyscallArgs) -> SyscallResult {
     // Crear nuevo proceso con su propio PML4
-    let (pid, _pml4_addr) = create_process_with_address_space(
+    let (pid, pml4_addr) = create_process_with_address_space(
         unsafe { &mut *(global_scheduler() as *mut _) },
         "forked_child",
         0,
     ).map_err(|_| SyscallError::Fault)?;
 
-    // Para simplicidad, el hijo comparte el mismo espacio de direcciones
-    // En una implementación completa, se haría copy-on-write aquí
-    let _ = _pml4_addr;
+    let mut sched: &mut crate::sched::Scheduler = unsafe { &mut *(global_scheduler() as *mut _) };
+    let _tid = sched.create_thread_with_address_space(
+        pid,
+        0x1000,
+        0x20000,
+        0x1000,
+        TaskPriority::Normal,
+        pml4_addr,
+    ).map_err(|_| SyscallError::Fault)?;
 
-    // Retornar el PID del hijo al padre
     Ok(pid as usize)
 }
 

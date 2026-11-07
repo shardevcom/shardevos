@@ -529,6 +529,12 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 |------------|-----------|-------------|
 | Thread address space | `kernel/sched/mod.rs` | `Scheduler::create_thread_with_address_space` asigna `cr3` del hilo |
 
+### 8.6 Fork con espacio de dirección (F22-02)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Fork thread address space | `kernel/syscall/mod.rs` | `sys_fork` crea un hilo con el PML4 (CR3) del hijo |
+
 
 ### 8.3 Estado de validación
 
