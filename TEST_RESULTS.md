@@ -74,6 +74,8 @@ Comando: `./build/build.sh run` (o `qemu-system-x86_64 -cdrom build/ShardevOS.is
 
 Resultado: GRUB carga el kernel vía Multiboot2, el kernel entra en modo protegido, configura GDT/PAE/paginación, salta a modo largo y ejecuta `kernel_main` hasta su bucle principal sin triple fault.
 
+Nota: el kernel ahora expone escritura serie (`serial_write_byte/str/line`) para las líneas clave de arranque (por ejemplo, motor de embeddings y exportación a `/minilm_int8.semb`).
+
 Nota: la salida por puerto serie COM1 no es visible en el entorno de prueba QEMU actual (configuración de terminal), pero el kernel arranca y ejecuta sin fallos críticos (QEMU permanece vivo, sin triple fault).
 
 ---

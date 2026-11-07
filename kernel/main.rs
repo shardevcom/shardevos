@@ -4,6 +4,7 @@
 extern crate alloc;
 
 use alloc::format;
+use core::arch::asm;
 use crate::fs::Filesystem;
 use crate::ui_manager::display::Color;
 use crate::ui_manager::global_gfx_display;
@@ -78,6 +79,24 @@ const INFO_LINES: [&str; 4] = [
     "║  Cargador universal: PE / ELF / MachO                ║",
     "║  Arranque completado correctamente                   ║",
 ];
+
+unsafe fn serial_write_byte(byte: u8) {
+    let port: u16 = 0x3F8;
+    unsafe {
+        asm!("out dx, al", in("dx") port, in("al") byte, options(nostack));
+    }
+}
+
+unsafe fn serial_write_str(s: &str) {
+    for b in s.as_bytes() {
+        serial_write_byte(*b);
+    }
+}
+
+unsafe fn serial_write_line(s: &str) {
+    serial_write_str(s);
+    serial_write_byte(b'\n');
+}
 
 // Punto de entrada lógico del kernel (llamado desde arch/x86_64/entry.rs).
 #[no_mangle]
@@ -163,6 +182,7 @@ pub extern "C" fn kernel_main() -> ! {
     unsafe {
         crate::ai_engine::init_embedding_model();
         crate::vga_print_line("  [ OK ] Motor de embeddings IA inicializado.", 26, 0x0A);
+        serial_write_line("[shardevos] Motor de embeddings IA inicializado.");
     }
 
     // Exportar el modelo de embeddings a un archivo .semb e inicializarlo en VFS
@@ -175,6 +195,7 @@ pub extern "C" fn kernel_main() -> ! {
         if let Ok(model_inode) = model_inode {
             let _ = fs.write_data(model_inode, 0, &semb_buf[..semb_len]);
         }
+        serial_write_line("[shardevos] Modelo embeddings exportado a /minilm_int8.semb.");
     }
 
     // Inicializar modo gráfico VESA para la UI
@@ -228,6 +249,7 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     // Cargar y ejecutar programa de usuario: search.elf (indexador/buscador)
+    unsafe { serial_write_line("[shardevos] Cargando programa de usuario: search"); }
     crate::vga_print_line("  [ INFO ] Cargando programa de usuario (search)...", 18, 0x0F);
     match crate::userland_loader::load_and_run_userland(crate::userland_bin::USERLAND_SEARCH_ELF) {
         Ok(()) => {
