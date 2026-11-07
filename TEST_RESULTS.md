@@ -516,6 +516,13 @@ No es viable correr un LLM grande dentro del kernel `no_std`. Se recomienda:
 | Focus topmost | `kernel/ui_manager/window.rs` | `WindowManager::focus_topmost_visible` |
 | Handler | `kernel/ui_manager/mod.rs` | Enfoca ventana en `TouchDown`/`GestureTap` |
 
+### 8.4 Scroll/gestos ratón/touch a ventana (F21-04)
+
+| Componente | Ubicación | Descripción |
+|------------|-----------|-------------|
+| Scroll window | `kernel/ui_manager/window.rs` | `WindowManager::scroll_window` |
+| Handler | `kernel/ui_manager/mod.rs` | Desplaza ventana enfocada en `Scroll`/`GestureSwipe` |
+
 ### 8.3 Estado de validación
 
 | Prueba | Comando | Resultado |

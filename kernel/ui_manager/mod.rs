@@ -103,6 +103,11 @@ pub fn handle_ui_input_event(event: InputEvent) {
     if matches!(event.event_type, InputEventType::TouchDown | InputEventType::GestureTap) {
         let _ = global_window_manager().focus_topmost_visible();
     }
+    if matches!(event.event_type, InputEventType::Scroll | InputEventType::GestureSwipe) {
+        let focused = global_window_manager().focused_window();
+        let delta = event.drag.map(|d| d.end_y - d.start_y).unwrap_or(0);
+        let _ = global_window_manager().scroll_window(focused, delta);
+    }
 }
 
 /// Devuelve el último contador de eventos de input procesados por el UI.

@@ -76,6 +76,7 @@ pub struct Window {
     pub state: WindowState,
     pub buffer: Option<Framebuffer>,
     pub z_order: u32,
+    pub scroll_y: u32,
     pub created_at_us: u64,
 }
 
@@ -218,6 +219,19 @@ impl WindowManager {
         Ok(id)
     }
 
+    /// Desplaza una ventana (scroll).
+    pub fn scroll_window(&self, id: WindowId, delta_y: i32) -> UiResult<()> {
+        if !self.is_initialized() {
+            return Err(UiError::NotInitialized);
+        }
+        let mut windows = self.windows.lock();
+        let window = windows.iter_mut().find(|w| w.as_ref().map(|w| w.id == id).unwrap_or(false))
+            .and_then(|w| w.as_mut())
+            .ok_or(UiError::WindowNotFound)?;
+        window.scroll_y = (window.scroll_y as i32 + delta_y).max(0) as u32;
+        Ok(())
+    }
+
     /// Crea una nueva ventana.
     pub fn create_window(&self, props: WindowProperties) -> UiResult<WindowId> {
         if !self.is_initialized() {
@@ -242,6 +256,7 @@ impl WindowManager {
             state: WindowState::Created,
             buffer: None,
             z_order,
+            scroll_y: 0,
             created_at_us: time_us(),
         };
 
